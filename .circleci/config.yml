@@ -9,4 +9,10 @@ jobs:
     working_directory: /go/src/github.com/taylorchu/work
     steps:
       - checkout
-      - run: go test -p 1 -v ./...
+      - run: go test -p 1 -v github.com/taylorchu/work
+      - run: go test -p 1 -v github.com/taylorchu/work/bench
+      - run: go test -p 1 -v github.com/taylorchu/work/middleware/concurrent
+      - run: go test -p 1 -v github.com/taylorchu/work/middleware/discard
+      - run: go test -p 1 -v github.com/taylorchu/work/middleware/logrus
+      - run: go test -p 1 -v github.com/taylorchu/work/middleware/prometheus
+      - run: go test -p 1 -v github.com/taylorchu/work/middleware/unique

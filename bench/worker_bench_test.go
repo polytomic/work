@@ -6,13 +6,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gocraft/work"
+	"github.com/go-redis/redis"
+	work1 "github.com/gocraft/work"
 	redigo "github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/require"
+	"github.com/taylorchu/work"
 )
 
 func BenchmarkWorkerRunJob(b *testing.B) {
-	client := newRedisClient()
+	client := redis.NewClient(&redis.Options{
+		Addr:         "127.0.0.1:6379",
+		PoolSize:     10,
+		MinIdleConns: 10,
+	})
 	defer client.Close()
 
 	pool := &redigo.Pool{
@@ -28,20 +34,20 @@ func BenchmarkWorkerRunJob(b *testing.B) {
 				b.StopTimer()
 				require.NoError(b, client.FlushAll().Err())
 
-				wp := work.NewWorkerPoolWithOptions(
+				wp := work1.NewWorkerPoolWithOptions(
 					struct{}{}, 1, "ns1", pool,
-					work.WorkerPoolOptions{
+					work1.WorkerPoolOptions{
 						SleepBackoffs: []int64{1000},
 					},
 				)
 
 				var wg sync.WaitGroup
-				wp.Job("test", func(job *work.Job) error {
+				wp.Job("test", func(job *work1.Job) error {
 					wg.Done()
 					return nil
 				})
 
-				enqueuer := work.NewEnqueuer("ns1", pool)
+				enqueuer := work1.NewEnqueuer("ns1", pool)
 				for i := 0; i < k; i++ {
 					_, err := enqueuer.Enqueue("test", nil)
 					require.NoError(b, err)
@@ -60,17 +66,18 @@ func BenchmarkWorkerRunJob(b *testing.B) {
 				b.StopTimer()
 				require.NoError(b, client.FlushAll().Err())
 
-				w := NewWorker(&WorkerOptions{
+				queue := work.NewRedisQueue(client)
+				w := work.NewWorker(&work.WorkerOptions{
 					Namespace: "ns1",
-					Queue:     NewRedisQueue(client),
+					Queue:     queue,
 				})
 				var wg sync.WaitGroup
 				err := w.Register("test",
-					func(*Job, *DequeueOptions) error {
+					func(*work.Job, *work.DequeueOptions) error {
 						wg.Done()
 						return nil
 					},
-					&JobOptions{
+					&work.JobOptions{
 						MaxExecutionTime: time.Minute,
 						IdleWait:         time.Second,
 						NumGoroutines:    1,
@@ -79,9 +86,9 @@ func BenchmarkWorkerRunJob(b *testing.B) {
 				require.NoError(b, err)
 
 				for i := 0; i < k; i++ {
-					job := NewJob()
+					job := work.NewJob()
 
-					err := w.queue.Enqueue(job, &EnqueueOptions{
+					err := queue.Enqueue(job, &work.EnqueueOptions{
 						Namespace: "ns1",
 						QueueID:   "test",
 					})
