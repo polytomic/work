@@ -32,6 +32,9 @@ type ContextHandleFunc func(context.Context, *Job, *DequeueOptions) error
 // HandleMiddleware modifies HandleFunc hehavior.
 type HandleMiddleware func(HandleFunc) HandleFunc
 
+// BackoffFunc computes when to retry this job from now.
+type BackoffFunc func(*Job, *DequeueOptions) time.Duration
+
 type handler struct {
 	QueueID    string
 	HandleFunc ContextHandleFunc
@@ -63,12 +66,11 @@ func NewWorker(opt *WorkerOptions) *Worker {
 }
 
 // JobOptions specifies how a job is executed.
-// It overrides default WorkerOptions so each handler can have different execution settings.
 type JobOptions struct {
-	WorkerOptions
 	MaxExecutionTime time.Duration
 	IdleWait         time.Duration
 	NumGoroutines    int64
+	Backoff          BackoffFunc
 
 	DequeueMiddleware []DequeueMiddleware
 	HandleMiddleware  []HandleMiddleware
@@ -107,24 +109,6 @@ func (opt *JobOptions) Validate() error {
 	return nil
 }
 
-var (
-	// ErrDoNotRetry is returned if the job should not be retried;
-	// this may be because the job is unrecoverable, or because
-	// the handler has already rescheduled it.
-	ErrDoNotRetry = errors.New("work: do not retry")
-
-	// ErrQueueNotFound is returned if the queue is not yet
-	// defined with Register().
-	ErrQueueNotFound = errors.New("work: queue is not found")
-
-	// ErrUnrecoverable is returned if the error is unrecoverable.
-	// The job will be discarded.
-	ErrUnrecoverable = fmt.Errorf("work: permanent error: %w", ErrDoNotRetry)
-
-	// ErrUnsupported is returned if it is not implemented.
-	ErrUnsupported = errors.New("work: unsupported")
-)
-
 // Register adds handler for a queue.
 // queueID and namespace should be the same as the one used to enqueue.
 func (w *Worker) Register(queueID string, h HandleFunc, opt *JobOptions) error {
@@ -153,6 +137,93 @@ func (w *Worker) RegisterWithContext(queueID string, h ContextHandleFunc, opt *J
 	return nil
 }
 
+// OnceJobOptions specifies how a job is executed.
+type OnceJobOptions struct {
+	MaxExecutionTime time.Duration
+	Backoff          BackoffFunc
+
+	DequeueMiddleware []DequeueMiddleware
+	HandleMiddleware  []HandleMiddleware
+}
+
+// AddDequeueMiddleware adds DequeueMiddleware.
+func (opt *OnceJobOptions) AddDequeueMiddleware(mw DequeueMiddleware) *OnceJobOptions {
+	opt.DequeueMiddleware = append(opt.DequeueMiddleware, mw)
+	return opt
+}
+
+// AddHandleMiddleware adds HandleMiddleware.
+func (opt *OnceJobOptions) AddHandleMiddleware(mw HandleMiddleware) *OnceJobOptions {
+	opt.HandleMiddleware = append(opt.HandleMiddleware, mw)
+	return opt
+}
+
+// Validate validates OnceJobOptions.
+func (opt *OnceJobOptions) Validate() error {
+	if opt.MaxExecutionTime <= 0 {
+		return ErrMaxExecutionTime
+	}
+	return nil
+}
+
+// RunOnce simply runs one job from a queue.
+// The context is created with context.WithTimeout set from MaxExecutionTime.
+//
+// This is used with kubernetes where a pod is created directly to run a job.
+func (w *Worker) RunOnce(ctx context.Context, queueID string, h ContextHandleFunc, opt *OnceJobOptions) error {
+	err := opt.Validate()
+	if err != nil {
+		return err
+	}
+
+	queue := w.opt.Queue
+	ns := w.opt.Namespace
+
+	dequeue := queue.Dequeue
+	for _, mw := range opt.DequeueMiddleware {
+		dequeue = mw(dequeue)
+	}
+
+	handle := func(job *Job, o *DequeueOptions) error {
+		ctx, cancel := context.WithTimeout(ctx, opt.MaxExecutionTime)
+		defer cancel()
+		return h(ctx, job, o)
+	}
+	for _, mw := range opt.HandleMiddleware {
+		handle = mw(handle)
+	}
+	handle = catchPanic(handle)
+
+	b := opt.Backoff
+	if b == nil {
+		b = defaultBackoff()
+	}
+	handle = retry(queue, b)(handle)
+
+	dopt := &DequeueOptions{
+		Namespace:    ns,
+		QueueID:      queueID,
+		At:           time.Now(),
+		InvisibleSec: int64(opt.MaxExecutionTime / time.Second),
+	}
+	job, err := dequeue(dopt)
+	if err != nil {
+		return err
+	}
+	err = handle(job, dopt)
+	if err != nil {
+		return err
+	}
+	err = queue.Ack(job, &AckOptions{
+		Namespace: dopt.Namespace,
+		QueueID:   dopt.QueueID,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // Start starts the worker.
 func (w *Worker) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -169,19 +240,11 @@ func (w *Worker) start(ctx context.Context, h handler) {
 	defer w.wg.Done()
 
 	queue := w.opt.Queue
-	if h.JobOptions.Queue != nil {
-		queue = h.JobOptions.Queue
-	}
 	ns := w.opt.Namespace
-	if h.JobOptions.Namespace != "" {
-		ns = h.JobOptions.Namespace
-	}
 
 	// print errors by default so that problems are noticeable.
 	errFunc := func(err error) { fmt.Println(err) }
-	if h.JobOptions.ErrorFunc != nil {
-		errFunc = h.JobOptions.ErrorFunc
-	} else if w.opt.ErrorFunc != nil {
+	if w.opt.ErrorFunc != nil {
 		errFunc = w.opt.ErrorFunc
 	}
 
@@ -198,7 +261,12 @@ func (w *Worker) start(ctx context.Context, h handler) {
 		handle = mw(handle)
 	}
 	handle = catchPanic(handle)
-	handle = retry(queue)(handle)
+
+	b := h.JobOptions.Backoff
+	if b == nil {
+		b = defaultBackoff()
+	}
+	handle = retry(queue, b)(handle)
 
 	// prepare bulk ack flush
 	var ackJobs []*Job
@@ -251,7 +319,7 @@ func (w *Worker) start(ctx context.Context, h handler) {
 					Namespace:    ns,
 					QueueID:      h.QueueID,
 					At:           time.Now(),
-					InvisibleSec: int64(2 * (h.JobOptions.MaxExecutionTime + flushIntv) / time.Second),
+					InvisibleSec: int64((h.JobOptions.MaxExecutionTime + flushIntv) / time.Second),
 				}
 				job, err := dequeue(opt)
 				if err != nil {
@@ -316,13 +384,7 @@ func (w *Worker) ExportMetrics() (*Metrics, error) {
 	var queueMetrics []*QueueMetrics
 	for _, h := range w.handlerMap {
 		queue := w.opt.Queue
-		if h.JobOptions.Queue != nil {
-			queue = h.JobOptions.Queue
-		}
 		ns := w.opt.Namespace
-		if h.JobOptions.Namespace != "" {
-			ns = h.JobOptions.Namespace
-		}
 		exporter, ok := queue.(MetricsExporter)
 		if !ok {
 			continue
@@ -379,7 +441,38 @@ func catchPanic(f HandleFunc) HandleFunc {
 	}
 }
 
-func retry(queue Queue) HandleMiddleware {
+// retry error
+var (
+	// ErrDoNotRetry is returned if the job should not be retried;
+	// this may be because the job is unrecoverable, or because
+	// the handler has already rescheduled it.
+	ErrDoNotRetry = errors.New("work: do not retry")
+
+	// ErrUnrecoverable is returned if the error is unrecoverable.
+	// The job will be discarded.
+	ErrUnrecoverable = fmt.Errorf("work: permanent error: %w", ErrDoNotRetry)
+)
+
+// https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md
+func defaultBackoff() BackoffFunc {
+	return func(job *Job, opt *DequeueOptions) time.Duration {
+		b := backoff.NewExponentialBackOff()
+		b.InitialInterval = 2 * time.Second
+		b.RandomizationFactor = 0.2
+		b.Multiplier = 1.6
+		b.MaxInterval = 24 * time.Hour
+		b.MaxElapsedTime = 0
+		b.Reset()
+
+		var next time.Duration
+		for i := int64(0); i < job.Retries; i++ {
+			next = b.NextBackOff()
+		}
+		return next
+	}
+}
+
+func retry(queue Queue, backoff BackoffFunc) HandleMiddleware {
 	return func(f HandleFunc) HandleFunc {
 		return func(job *Job, opt *DequeueOptions) error {
 			err := f(job, opt)
@@ -396,20 +489,7 @@ func retry(queue Queue) HandleMiddleware {
 				job.LastError = err.Error()
 				job.UpdatedAt = now
 
-				// https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md
-				b := backoff.NewExponentialBackOff()
-				b.InitialInterval = 2 * time.Second
-				b.RandomizationFactor = 0.2
-				b.Multiplier = 1.6
-				b.MaxInterval = 24 * time.Hour
-				b.MaxElapsedTime = 0
-				b.Reset()
-
-				var next time.Duration
-				for i := int64(0); i < job.Retries; i++ {
-					next = b.NextBackOff()
-				}
-				job.EnqueuedAt = now.Add(next)
+				job.EnqueuedAt = now.Add(backoff(job, opt))
 				queue.Enqueue(job, &EnqueueOptions{
 					Namespace: opt.Namespace,
 					QueueID:   opt.QueueID,

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v7"
+	"github.com/go-redis/redis/v8"
 	"github.com/taylorchu/work"
 	"github.com/taylorchu/work/middleware/discard"
 	"github.com/taylorchu/work/middleware/logrus"
@@ -68,6 +68,6 @@ func main() {
 	defer w.Stop()
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 }
