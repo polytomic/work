@@ -44,7 +44,7 @@ func TestSidekiqQueueExternalEnqueue(t *testing.T) {
 	err := job.MarshalJSONPayload([]int{1, 2, 3})
 	require.NoError(t, err)
 
-	err = q.ExternalEnqueue(job, &work.EnqueueOptions{
+	err = q.ExternalEnqueue(context.Background(), job, &work.EnqueueOptions{
 		Namespace: "{sidekiq}",
 		QueueID:   "import/TestWorker",
 	})
@@ -58,6 +58,7 @@ func TestSidekiqQueueExternalEnqueue(t *testing.T) {
 }
 
 func TestSidekiqQueueExternalEnqueueScheduled(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -74,7 +75,7 @@ func TestSidekiqQueueExternalEnqueueScheduled(t *testing.T) {
 	err := job.MarshalJSONPayload([]int{1, 2, 3})
 	require.NoError(t, err)
 
-	err = q.ExternalEnqueue(job, &work.EnqueueOptions{
+	err = q.ExternalEnqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{sidekiq}",
 		QueueID:   "import/TestWorker",
 	})
@@ -94,6 +95,7 @@ func TestSidekiqQueueExternalEnqueueScheduled(t *testing.T) {
 }
 
 func TestSidekiqQueueExternalDequeue(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -101,13 +103,13 @@ func TestSidekiqQueueExternalDequeue(t *testing.T) {
 	require.NoError(t, err)
 
 	q := NewQueue(client)
-	err = q.Pull(&PullOptions{
+	err = q.Pull(ctx, &PullOptions{
 		Namespace:        "{sidekiq}",
 		SidekiqNamespace: "{sidekiq}",
 		SidekiqQueue:     "default",
 	})
 	require.NoError(t, err)
-	job, err := q.Dequeue(&work.DequeueOptions{
+	job, err := q.Dequeue(ctx, &work.DequeueOptions{
 		Namespace:    "{sidekiq}",
 		QueueID:      "default/TestWorker",
 		At:           time.Now(),
@@ -124,6 +126,7 @@ func TestSidekiqQueueExternalDequeue(t *testing.T) {
 }
 
 func TestSidekiqQueueEnqueue(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -133,7 +136,7 @@ func TestSidekiqQueueEnqueue(t *testing.T) {
 	err := job.MarshalJSONPayload([]int{1, 2, 3})
 	require.NoError(t, err)
 
-	err = q.Enqueue(job, &work.EnqueueOptions{
+	err = q.Enqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -161,7 +164,7 @@ func TestSidekiqQueueEnqueue(t *testing.T) {
 	require.Equal(t, jobKey, z[0].Member)
 	require.EqualValues(t, job.EnqueuedAt.Unix(), z[0].Score)
 
-	err = q.Enqueue(job.Delay(time.Minute), &work.EnqueueOptions{
+	err = q.Enqueue(ctx, job.Delay(time.Minute), &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -181,6 +184,7 @@ func TestSidekiqQueueEnqueue(t *testing.T) {
 }
 
 func TestSidekiqQueueDequeue(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -191,7 +195,7 @@ func TestSidekiqQueueDequeue(t *testing.T) {
 	require.NoError(t, err)
 	jobKey := fmt.Sprintf("{ns1}:job:%s", job.ID)
 
-	err = q.ExternalEnqueue(job, &work.EnqueueOptions{
+	err = q.ExternalEnqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -199,15 +203,15 @@ func TestSidekiqQueueDequeue(t *testing.T) {
 
 	now := job.EnqueuedAt.Add(123 * time.Second)
 
-	err = q.(*sidekiqQueue).schedule("{ns1}", now)
+	err = q.(*sidekiqQueue).schedule(ctx, "{ns1}", now)
 	require.NoError(t, err)
-	err = q.Pull(&PullOptions{
+	err = q.Pull(ctx, &PullOptions{
 		Namespace:        "{ns1}",
 		SidekiqNamespace: "{ns1}",
 		SidekiqQueue:     "low",
 	})
 	require.NoError(t, err)
-	jobDequeued, err := q.Dequeue(&work.DequeueOptions{
+	jobDequeued, err := q.Dequeue(ctx, &work.DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "low/q1",
 		At:           now,
@@ -228,9 +232,9 @@ func TestSidekiqQueueDequeue(t *testing.T) {
 	require.Equal(t, jobKey, z[0].Member)
 	require.EqualValues(t, job.EnqueuedAt.Unix(), z[0].Score)
 
-	err = q.(*sidekiqQueue).schedule("{ns1}", now)
+	err = q.(*sidekiqQueue).schedule(ctx, "{ns1}", now)
 	require.NoError(t, err)
-	jobDequeued, err = q.Dequeue(&work.DequeueOptions{
+	jobDequeued, err = q.Dequeue(ctx, &work.DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "low/q1",
 		At:           now,
@@ -260,9 +264,9 @@ func TestSidekiqQueueDequeue(t *testing.T) {
 	require.EqualValues(t, now.Unix()+60, z[0].Score)
 
 	// empty
-	err = q.(*sidekiqQueue).schedule("{ns1}", now)
+	err = q.(*sidekiqQueue).schedule(ctx, "{ns1}", now)
 	require.NoError(t, err)
-	_, err = q.Dequeue(&work.DequeueOptions{
+	_, err = q.Dequeue(ctx, &work.DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "low/q1",
 		At:           now,
@@ -273,6 +277,7 @@ func TestSidekiqQueueDequeue(t *testing.T) {
 }
 
 func TestSidekiqQueueDequeueDeletedJob(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -282,7 +287,7 @@ func TestSidekiqQueueDequeueDeletedJob(t *testing.T) {
 	err := job.MarshalJSONPayload([]int{1, 2, 3})
 	require.NoError(t, err)
 
-	err = q.Enqueue(job, &work.EnqueueOptions{
+	err = q.Enqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -300,7 +305,7 @@ func TestSidekiqQueueDequeueDeletedJob(t *testing.T) {
 
 	require.NoError(t, client.Del(context.Background(), jobKey).Err())
 
-	_, err = q.Dequeue(&work.DequeueOptions{
+	_, err = q.Dequeue(ctx, &work.DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "low/q1",
 		At:           job.EnqueuedAt,
@@ -320,6 +325,7 @@ func TestSidekiqQueueDequeueDeletedJob(t *testing.T) {
 }
 
 func TestSidekiqQueueAck(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -329,7 +335,7 @@ func TestSidekiqQueueAck(t *testing.T) {
 	err := job.MarshalJSONPayload([]int{1, 2, 3})
 	require.NoError(t, err)
 
-	err = q.Enqueue(job, &work.EnqueueOptions{
+	err = q.Enqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -353,7 +359,7 @@ func TestSidekiqQueueAck(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, e)
 
-	err = q.Ack(job, &work.AckOptions{
+	err = q.Ack(ctx, job, &work.AckOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -373,7 +379,7 @@ func TestSidekiqQueueAck(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 0, e)
 
-	err = q.Ack(job, &work.AckOptions{
+	err = q.Ack(ctx, job, &work.AckOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -381,6 +387,7 @@ func TestSidekiqQueueAck(t *testing.T) {
 }
 
 func TestSidekiqQueueGetQueueMetrics(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -390,13 +397,13 @@ func TestSidekiqQueueGetQueueMetrics(t *testing.T) {
 	err := job.MarshalJSONPayload([]int{1, 2, 3})
 	require.NoError(t, err)
 
-	err = q.Enqueue(job, &work.EnqueueOptions{
+	err = q.Enqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
 	require.NoError(t, err)
 
-	m, err := q.GetQueueMetrics(&work.QueueMetricsOptions{
+	m, err := q.GetQueueMetrics(ctx, &work.QueueMetricsOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 		At:        job.EnqueuedAt,
@@ -407,7 +414,7 @@ func TestSidekiqQueueGetQueueMetrics(t *testing.T) {
 	require.EqualValues(t, 1, m.ReadyTotal)
 	require.EqualValues(t, 0, m.ScheduledTotal)
 
-	m, err = q.GetQueueMetrics(&work.QueueMetricsOptions{
+	m, err = q.GetQueueMetrics(ctx, &work.QueueMetricsOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 		At:        job.EnqueuedAt.Add(-time.Second),
@@ -420,6 +427,7 @@ func TestSidekiqQueueGetQueueMetrics(t *testing.T) {
 }
 
 func TestSidekiqQueueEnqueueDuplicated(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -430,7 +438,7 @@ func TestSidekiqQueueEnqueueDuplicated(t *testing.T) {
 	require.NoError(t, err)
 	jobKey := fmt.Sprintf("{ns1}:job:%s", job.ID)
 
-	err = q.ExternalEnqueue(job, &work.EnqueueOptions{
+	err = q.ExternalEnqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})
@@ -438,15 +446,15 @@ func TestSidekiqQueueEnqueueDuplicated(t *testing.T) {
 
 	now := job.EnqueuedAt
 
-	err = q.(*sidekiqQueue).schedule("{ns1}", now)
+	err = q.(*sidekiqQueue).schedule(ctx, "{ns1}", now)
 	require.NoError(t, err)
-	err = q.Pull(&PullOptions{
+	err = q.Pull(ctx, &PullOptions{
 		Namespace:        "{ns1}",
 		SidekiqNamespace: "{ns1}",
 		SidekiqQueue:     "low",
 	})
 	require.NoError(t, err)
-	jobDequeued, err := q.Dequeue(&work.DequeueOptions{
+	jobDequeued, err := q.Dequeue(ctx, &work.DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "low/q1",
 		At:           now,
@@ -467,7 +475,7 @@ func TestSidekiqQueueEnqueueDuplicated(t *testing.T) {
 	require.Equal(t, jobKey, z[0].Member)
 	require.EqualValues(t, job.EnqueuedAt.Unix()+60, z[0].Score)
 
-	err = q.ExternalEnqueue(job, &work.EnqueueOptions{
+	err = q.ExternalEnqueue(ctx, job, &work.EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "low/q1",
 	})

@@ -1,6 +1,7 @@
 package logrus
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -14,17 +15,17 @@ func TestHandleFuncLogger(t *testing.T) {
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	}
-	h := HandleFuncLogger(func(*work.Job, *work.DequeueOptions) error {
+	h := HandleFuncLogger(func(context.Context, *work.Job, *work.DequeueOptions) error {
 		return nil
 	})
 
-	err := h(job, opt)
+	err := h(context.Background(), job, opt)
 	require.NoError(t, err)
 
-	h = HandleFuncLogger(func(*work.Job, *work.DequeueOptions) error {
+	h = HandleFuncLogger(func(context.Context, *work.Job, *work.DequeueOptions) error {
 		return errors.New("no reason")
 	})
-	err = h(job, opt)
+	err = h(context.Background(), job, opt)
 	require.Error(t, err)
 }
 
@@ -34,16 +35,16 @@ func TestEnqueueFuncLogger(t *testing.T) {
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	}
-	h := EnqueueFuncLogger(func(*work.Job, *work.EnqueueOptions) error {
+	h := EnqueueFuncLogger(func(context.Context, *work.Job, *work.EnqueueOptions) error {
 		return nil
 	})
 
-	err := h(job, opt)
+	err := h(context.Background(), job, opt)
 	require.NoError(t, err)
 
-	h = EnqueueFuncLogger(func(*work.Job, *work.EnqueueOptions) error {
+	h = EnqueueFuncLogger(func(context.Context, *work.Job, *work.EnqueueOptions) error {
 		return errors.New("no reason")
 	})
-	err = h(job, opt)
+	err = h(context.Background(), job, opt)
 	require.Error(t, err)
 }

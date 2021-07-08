@@ -23,13 +23,13 @@ func TestEnqueuerBypass(t *testing.T) {
 	})
 
 	var called int
-	h := enq(func(*work.Job, *work.EnqueueOptions) error {
+	h := enq(func(context.Context, *work.Job, *work.EnqueueOptions) error {
 		called++
 		return nil
 	})
 	for i := 0; i < 3; i++ {
 		job := work.NewJob()
-		err := h(job, &work.EnqueueOptions{
+		err := h(context.Background(), job, &work.EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "q1",
 		})
@@ -39,6 +39,7 @@ func TestEnqueuerBypass(t *testing.T) {
 }
 
 func TestEnqueuer(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -51,13 +52,13 @@ func TestEnqueuer(t *testing.T) {
 	})
 
 	var called int
-	h := enq(func(*work.Job, *work.EnqueueOptions) error {
+	h := enq(func(context.Context, *work.Job, *work.EnqueueOptions) error {
 		called++
 		return nil
 	})
 	for i := 0; i < 3; i++ {
 		job := work.NewJob()
-		err := h(job, &work.EnqueueOptions{
+		err := h(ctx, job, &work.EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "q1",
 		})
@@ -66,9 +67,9 @@ func TestEnqueuer(t *testing.T) {
 	require.Equal(t, 1, called)
 
 	for i := 0; i < 3; i++ {
-		require.NoError(t, client.Del(context.Background(), "{ns1}:unique:q1:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08").Err())
+		require.NoError(t, client.Del(ctx, "{ns1}:unique:q1:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08").Err())
 		job := work.NewJob()
-		err := h(job, &work.EnqueueOptions{
+		err := h(ctx, job, &work.EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "q1",
 		})
@@ -92,7 +93,7 @@ func BenchmarkEnqueuer(b *testing.B) {
 	})
 
 	var called int
-	h := enq(func(*work.Job, *work.EnqueueOptions) error {
+	h := enq(func(context.Context, *work.Job, *work.EnqueueOptions) error {
 		called++
 		return nil
 	})
@@ -100,7 +101,7 @@ func BenchmarkEnqueuer(b *testing.B) {
 	b.StartTimer()
 	for n := 0; n < b.N; n++ {
 		job := work.NewJob()
-		h(job, &work.EnqueueOptions{
+		h(context.Background(), job, &work.EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "q1",
 		})

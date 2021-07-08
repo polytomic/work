@@ -2,6 +2,7 @@ package work
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -137,13 +138,13 @@ func (opt *EnqueueOptions) Validate() error {
 
 // Enqueuer enqueues a job.
 type Enqueuer interface {
-	Enqueue(*Job, *EnqueueOptions) error
+	Enqueue(context.Context, *Job, *EnqueueOptions) error
 }
 
 // ExternalEnqueuer enqueues a job with other queue protocol.
 // Queue adaptor that implements this can publish jobs directly to other types of queue systems.
 type ExternalEnqueuer interface {
-	ExternalEnqueue(*Job, *EnqueueOptions) error
+	ExternalEnqueue(context.Context, *Job, *EnqueueOptions) error
 }
 
 // DequeueOptions specifies how a job is dequeued.
@@ -202,8 +203,8 @@ var (
 // Dequeuer dequeues a job.
 // If a job is processed successfully, call Ack() to delete the job.
 type Dequeuer interface {
-	Dequeue(*DequeueOptions) (*Job, error)
-	Ack(*Job, *AckOptions) error
+	Dequeue(context.Context, *DequeueOptions) (*Job, error)
+	Ack(context.Context, *Job, *AckOptions) error
 }
 
 // Queue can enqueue and dequeue jobs.
@@ -214,19 +215,19 @@ type Queue interface {
 
 // BulkEnqueuer enqueues jobs in a batch.
 type BulkEnqueuer interface {
-	BulkEnqueue([]*Job, *EnqueueOptions) error
+	BulkEnqueue(context.Context, []*Job, *EnqueueOptions) error
 }
 
 // ExternalBulkEnqueuer enqueues jobs in a batch with other queue protocol.
 // Queue adaptor that implements this can publish jobs directly to other types of queue systems.
 type ExternalBulkEnqueuer interface {
-	ExternalBulkEnqueue([]*Job, *EnqueueOptions) error
+	ExternalBulkEnqueue(context.Context, []*Job, *EnqueueOptions) error
 }
 
 // BulkDequeuer dequeues jobs in a batch.
 type BulkDequeuer interface {
-	BulkDequeue(int64, *DequeueOptions) ([]*Job, error)
-	BulkAck([]*Job, *AckOptions) error
+	BulkDequeue(context.Context, int64, *DequeueOptions) ([]*Job, error)
+	BulkAck(context.Context, []*Job, *AckOptions) error
 }
 
 // FindOptions specifies how a job is searched from a queue.
@@ -247,5 +248,5 @@ func (opt *FindOptions) Validate() error {
 // It returns nil if the job is no longer in the queue.
 // The length of the returned job list will be equal to the length of jobIDs.
 type BulkJobFinder interface {
-	BulkFind(jobIDs []string, opts *FindOptions) ([]*Job, error)
+	BulkFind(ctx context.Context, jobIDs []string, opts *FindOptions) ([]*Job, error)
 }

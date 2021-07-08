@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"errors"
 	"net/http/httptest"
 	"testing"
@@ -16,17 +17,17 @@ func TestHandleFuncMetrics(t *testing.T) {
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	}
-	h := HandleFuncMetrics(func(*work.Job, *work.DequeueOptions) error {
+	h := HandleFuncMetrics(func(context.Context, *work.Job, *work.DequeueOptions) error {
 		return nil
 	})
 
-	err := h(job, opt)
+	err := h(context.Background(), job, opt)
 	require.NoError(t, err)
 
-	h = HandleFuncMetrics(func(*work.Job, *work.DequeueOptions) error {
+	h = HandleFuncMetrics(func(context.Context, *work.Job, *work.DequeueOptions) error {
 		return errors.New("no reason")
 	})
-	err = h(job, opt)
+	err = h(context.Background(), job, opt)
 	require.Error(t, err)
 
 	r := httptest.NewRecorder()
@@ -47,17 +48,17 @@ func TestEnqueueFuncMetrics(t *testing.T) {
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	}
-	h := EnqueueFuncMetrics(func(*work.Job, *work.EnqueueOptions) error {
+	h := EnqueueFuncMetrics(func(context.Context, *work.Job, *work.EnqueueOptions) error {
 		return nil
 	})
 
-	err := h(job, opt)
+	err := h(context.Background(), job, opt)
 	require.NoError(t, err)
 
-	h = EnqueueFuncMetrics(func(*work.Job, *work.EnqueueOptions) error {
+	h = EnqueueFuncMetrics(func(context.Context, *work.Job, *work.EnqueueOptions) error {
 		return errors.New("no reason")
 	})
-	err = h(job, opt)
+	err = h(context.Background(), job, opt)
 	require.Error(t, err)
 
 	r := httptest.NewRecorder()

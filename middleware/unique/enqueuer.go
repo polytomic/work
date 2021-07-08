@@ -31,13 +31,13 @@ var (
 // Enqueuer uses UniqueFunc to ensure job uniqueness in a period.
 func Enqueuer(eopt *EnqueuerOptions) work.EnqueueMiddleware {
 	return func(f work.EnqueueFunc) work.EnqueueFunc {
-		return func(job *work.Job, opt *work.EnqueueOptions) error {
+		return func(ctx context.Context, job *work.Job, opt *work.EnqueueOptions) error {
 			b, expireIn, err := eopt.UniqueFunc(job, opt)
 			if err != nil {
 				return err
 			}
 			if b == nil {
-				return f(job, opt)
+				return f(ctx, job, opt)
 			}
 			if expireIn <= 0 {
 				return ErrDedupDuration
@@ -49,12 +49,12 @@ func Enqueuer(eopt *EnqueuerOptions) work.EnqueueMiddleware {
 				return err
 			}
 			key := fmt.Sprintf("%s:unique:%s:%x", opt.Namespace, opt.QueueID, h.Sum(nil))
-			notExist, err := eopt.Client.SetNX(context.Background(), key, 1, expireIn).Result()
+			notExist, err := eopt.Client.SetNX(ctx, key, 1, expireIn).Result()
 			if err != nil {
 				return err
 			}
 			if notExist {
-				return f(job, opt)
+				return f(ctx, job, opt)
 			}
 			return nil
 		}

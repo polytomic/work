@@ -12,13 +12,13 @@ import (
 )
 
 // DequeueFunc generates a job.
-type DequeueFunc func(*DequeueOptions) (*Job, error)
+type DequeueFunc func(context.Context, *DequeueOptions) (*Job, error)
 
 // DequeueMiddleware modifies DequeueFunc behavior.
 type DequeueMiddleware func(DequeueFunc) DequeueFunc
 
 // EnqueueFunc takes in a job for processing.
-type EnqueueFunc func(*Job, *EnqueueOptions) error
+type EnqueueFunc func(context.Context, *Job, *EnqueueOptions) error
 
 // EnqueueMiddleware modifies EnqueueFunc behavior.
 type EnqueueMiddleware func(EnqueueFunc) EnqueueFunc
@@ -29,8 +29,8 @@ type HandleFunc func(*Job, *DequeueOptions) error
 // ContextHandleFunc runs a job.
 type ContextHandleFunc func(context.Context, *Job, *DequeueOptions) error
 
-// HandleMiddleware modifies HandleFunc hehavior.
-type HandleMiddleware func(HandleFunc) HandleFunc
+// HandleMiddleware modifies HandleFunc behavior.
+type HandleMiddleware func(ContextHandleFunc) ContextHandleFunc
 
 // BackoffFunc computes when to retry this job from now.
 type BackoffFunc func(*Job, *DequeueOptions) time.Duration
@@ -184,7 +184,7 @@ func (w *Worker) RunOnce(ctx context.Context, queueID string, h ContextHandleFun
 		dequeue = mw(dequeue)
 	}
 
-	handle := func(job *Job, o *DequeueOptions) error {
+	handle := func(ctx context.Context, job *Job, o *DequeueOptions) error {
 		ctx, cancel := context.WithTimeout(ctx, opt.MaxExecutionTime)
 		defer cancel()
 		return h(ctx, job, o)
@@ -206,15 +206,15 @@ func (w *Worker) RunOnce(ctx context.Context, queueID string, h ContextHandleFun
 		At:           time.Now(),
 		InvisibleSec: int64(opt.MaxExecutionTime / time.Second),
 	}
-	job, err := dequeue(dopt)
+	job, err := dequeue(ctx, dopt)
 	if err != nil {
 		return err
 	}
-	err = handle(job, dopt)
+	err = handle(ctx, job, dopt)
 	if err != nil {
 		return err
 	}
-	err = queue.Ack(job, &AckOptions{
+	err = queue.Ack(ctx, job, &AckOptions{
 		Namespace: dopt.Namespace,
 		QueueID:   dopt.QueueID,
 	})
@@ -254,9 +254,7 @@ func (w *Worker) start(ctx context.Context, h handler) {
 	}
 	dequeue = idleWait(ctx, h.JobOptions.IdleWait)(dequeue)
 
-	handle := func(job *Job, o *DequeueOptions) error {
-		return h.HandleFunc(ctx, job, o)
-	}
+	handle := h.HandleFunc
 	for _, mw := range h.JobOptions.HandleMiddleware {
 		handle = mw(handle)
 	}
@@ -270,14 +268,14 @@ func (w *Worker) start(ctx context.Context, h handler) {
 
 	// prepare bulk ack flush
 	var ackJobs []*Job
-	flush := func() error {
+	flush := func(ctx context.Context) error {
 		opt := &AckOptions{
 			Namespace: ns,
 			QueueID:   h.QueueID,
 		}
 		bulkDeq, ok := queue.(BulkDequeuer)
 		if ok {
-			err := bulkDeq.BulkAck(ackJobs, opt)
+			err := bulkDeq.BulkAck(ctx, ackJobs, opt)
 			if err != nil {
 				return err
 			}
@@ -285,7 +283,7 @@ func (w *Worker) start(ctx context.Context, h handler) {
 			return nil
 		}
 		for _, job := range ackJobs {
-			err := queue.Ack(job, opt)
+			err := queue.Ack(ctx, job, opt)
 			if err != nil {
 				return err
 			}
@@ -294,7 +292,10 @@ func (w *Worker) start(ctx context.Context, h handler) {
 		return nil
 	}
 	defer func() {
-		err := flush()
+		// We flush Jobs at shutdown, which is signaled by
+		// canceling the overarching context. Use the
+		// Background context so we actually attempt to flush.
+		err := flush(context.Background())
 		if err != nil {
 			errFunc(err)
 		}
@@ -309,7 +310,7 @@ func (w *Worker) start(ctx context.Context, h handler) {
 		case <-ctx.Done():
 			return
 		case <-flushTicker.C:
-			err := flush()
+			err := flush(ctx)
 			if err != nil {
 				errFunc(err)
 			}
@@ -321,21 +322,21 @@ func (w *Worker) start(ctx context.Context, h handler) {
 					At:           time.Now(),
 					InvisibleSec: int64((h.JobOptions.MaxExecutionTime + flushIntv) / time.Second),
 				}
-				job, err := dequeue(opt)
+				job, err := dequeue(ctx, opt)
 				if err != nil {
 					if !errors.Is(err, ErrEmptyQueue) {
 						errFunc(err)
 					}
 					return err
 				}
-				err = handle(job, opt)
+				err = handle(ctx, job, opt)
 				if err != nil {
 					return err
 				}
 				ackJobs = append(ackJobs, job)
 				if len(ackJobs) >= 1000 {
 					// prevent un-acked job count to be too large
-					err := flush()
+					err := flush(ctx)
 					if err != nil {
 						errFunc(err)
 						return err
@@ -354,7 +355,7 @@ func getDequeueFunc(queue Queue) DequeueFunc {
 	}
 
 	var jobs []*Job
-	return func(opt *DequeueOptions) (*Job, error) {
+	return func(ctx context.Context, opt *DequeueOptions) (*Job, error) {
 		if len(jobs) == 0 {
 			// this is an optimization to reduce system calls.
 			//
@@ -368,7 +369,7 @@ func getDequeueFunc(queue Queue) DequeueFunc {
 			bulkOpt.InvisibleSec *= count
 
 			var err error
-			jobs, err = bulkDeq.BulkDequeue(count, &bulkOpt)
+			jobs, err = bulkDeq.BulkDequeue(ctx, count, &bulkOpt)
 			if err != nil {
 				return nil, err
 			}
@@ -380,7 +381,7 @@ func getDequeueFunc(queue Queue) DequeueFunc {
 }
 
 // ExportMetrics dumps queue stats if the queue implements MetricsExporter.
-func (w *Worker) ExportMetrics() (*Metrics, error) {
+func (w *Worker) ExportMetrics(ctx context.Context) (*Metrics, error) {
 	var queueMetrics []*QueueMetrics
 	for _, h := range w.handlerMap {
 		queue := w.opt.Queue
@@ -389,7 +390,7 @@ func (w *Worker) ExportMetrics() (*Metrics, error) {
 		if !ok {
 			continue
 		}
-		m, err := exporter.GetQueueMetrics(&QueueMetricsOptions{
+		m, err := exporter.GetQueueMetrics(ctx, &QueueMetricsOptions{
 			Namespace: ns,
 			QueueID:   h.QueueID,
 			At:        time.Now(),
@@ -414,8 +415,8 @@ func (w *Worker) Stop() {
 
 func idleWait(ctx context.Context, d time.Duration) DequeueMiddleware {
 	return func(f DequeueFunc) DequeueFunc {
-		return func(opt *DequeueOptions) (*Job, error) {
-			job, err := f(opt)
+		return func(ctx context.Context, opt *DequeueOptions) (*Job, error) {
+			job, err := f(ctx, opt)
 			if err != nil {
 				if errors.Is(err, ErrEmptyQueue) {
 					select {
@@ -430,14 +431,14 @@ func idleWait(ctx context.Context, d time.Duration) DequeueMiddleware {
 	}
 }
 
-func catchPanic(f HandleFunc) HandleFunc {
-	return func(job *Job, opt *DequeueOptions) (err error) {
+func catchPanic(f ContextHandleFunc) ContextHandleFunc {
+	return func(ctx context.Context, job *Job, opt *DequeueOptions) (err error) {
 		defer func() {
 			if r := recover(); r != nil {
 				err = fmt.Errorf("panic: %v\n\n%s", r, debug.Stack())
 			}
 		}()
-		return f(job, opt)
+		return f(ctx, job, opt)
 	}
 }
 
@@ -473,9 +474,9 @@ func defaultBackoff() BackoffFunc {
 }
 
 func retry(queue Queue, backoff BackoffFunc) HandleMiddleware {
-	return func(f HandleFunc) HandleFunc {
-		return func(job *Job, opt *DequeueOptions) error {
-			err := f(job, opt)
+	return func(f ContextHandleFunc) ContextHandleFunc {
+		return func(ctx context.Context, job *Job, opt *DequeueOptions) error {
+			err := f(ctx, job, opt)
 			if err != nil {
 				if errors.Is(err, ErrUnrecoverable) {
 					return nil // ack
@@ -490,7 +491,7 @@ func retry(queue Queue, backoff BackoffFunc) HandleMiddleware {
 				job.UpdatedAt = now
 
 				job.EnqueuedAt = now.Add(backoff(job, opt))
-				queue.Enqueue(job, &EnqueueOptions{
+				queue.Enqueue(ctx, job, &EnqueueOptions{
 					Namespace: opt.Namespace,
 					QueueID:   opt.QueueID,
 				})

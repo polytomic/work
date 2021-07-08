@@ -12,6 +12,7 @@ import (
 )
 
 func TestRedisQueueEnqueue(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -25,7 +26,7 @@ func TestRedisQueueEnqueue(t *testing.T) {
 	err := job.MarshalPayload(message{Text: "hello"})
 	require.NoError(t, err)
 
-	err = q.Enqueue(job, &EnqueueOptions{
+	err = q.Enqueue(ctx, job, &EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
@@ -41,7 +42,7 @@ func TestRedisQueueEnqueue(t *testing.T) {
 		"msgpack": string(jobm),
 	}, h)
 
-	jobs, err := q.(BulkJobFinder).BulkFind([]string{job.ID, "not-exist-id"}, &FindOptions{
+	jobs, err := q.(BulkJobFinder).BulkFind(ctx, []string{job.ID, "not-exist-id"}, &FindOptions{
 		Namespace: "{ns1}",
 	})
 	require.NoError(t, err)
@@ -51,12 +52,12 @@ func TestRedisQueueEnqueue(t *testing.T) {
 	require.Nil(t, jobs[1])
 
 	jobs[0].LastError = "hello world"
-	err = q.Enqueue(jobs[0], &EnqueueOptions{
+	err = q.Enqueue(ctx, jobs[0], &EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
 	require.NoError(t, err)
-	jobs, err = q.(BulkJobFinder).BulkFind([]string{job.ID}, &FindOptions{
+	jobs, err = q.(BulkJobFinder).BulkFind(ctx, []string{job.ID}, &FindOptions{
 		Namespace: "{ns1}",
 	})
 	require.NoError(t, err)
@@ -76,7 +77,7 @@ func TestRedisQueueEnqueue(t *testing.T) {
 	require.Equal(t, jobKey, z[0].Member)
 	require.EqualValues(t, job.EnqueuedAt.Unix(), z[0].Score)
 
-	err = q.Enqueue(job.Delay(time.Minute), &EnqueueOptions{
+	err = q.Enqueue(ctx, job.Delay(time.Minute), &EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
@@ -96,6 +97,7 @@ func TestRedisQueueEnqueue(t *testing.T) {
 }
 
 func TestRedisQueueDequeue(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -110,7 +112,7 @@ func TestRedisQueueDequeue(t *testing.T) {
 	require.NoError(t, err)
 	jobKey := fmt.Sprintf("{ns1}:job:%s", job.ID)
 
-	err = q.Enqueue(job, &EnqueueOptions{
+	err = q.Enqueue(ctx, job, &EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
@@ -118,7 +120,7 @@ func TestRedisQueueDequeue(t *testing.T) {
 
 	now := job.EnqueuedAt.Add(123 * time.Second)
 
-	jobDequeued, err := q.Dequeue(&DequeueOptions{
+	jobDequeued, err := q.Dequeue(ctx, &DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "q1",
 		At:           now,
@@ -139,7 +141,7 @@ func TestRedisQueueDequeue(t *testing.T) {
 	require.Equal(t, jobKey, z[0].Member)
 	require.EqualValues(t, job.EnqueuedAt.Unix(), z[0].Score)
 
-	jobDequeued, err = q.Dequeue(&DequeueOptions{
+	jobDequeued, err = q.Dequeue(ctx, &DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "q1",
 		At:           now,
@@ -169,7 +171,7 @@ func TestRedisQueueDequeue(t *testing.T) {
 	require.EqualValues(t, now.Unix()+60, z[0].Score)
 
 	// empty
-	_, err = q.Dequeue(&DequeueOptions{
+	_, err = q.Dequeue(ctx, &DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "q1",
 		At:           now,
@@ -180,6 +182,7 @@ func TestRedisQueueDequeue(t *testing.T) {
 }
 
 func TestRedisQueueDequeueDeletedJob(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -193,7 +196,7 @@ func TestRedisQueueDequeueDeletedJob(t *testing.T) {
 	err := job.MarshalPayload(message{Text: "hello"})
 	require.NoError(t, err)
 
-	err = q.Enqueue(job, &EnqueueOptions{
+	err = q.Enqueue(ctx, job, &EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
@@ -211,7 +214,7 @@ func TestRedisQueueDequeueDeletedJob(t *testing.T) {
 
 	require.NoError(t, client.Del(context.Background(), jobKey).Err())
 
-	_, err = q.Dequeue(&DequeueOptions{
+	_, err = q.Dequeue(ctx, &DequeueOptions{
 		Namespace:    "{ns1}",
 		QueueID:      "q1",
 		At:           job.EnqueuedAt,
@@ -231,6 +234,7 @@ func TestRedisQueueDequeueDeletedJob(t *testing.T) {
 }
 
 func TestRedisQueueAck(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -238,7 +242,7 @@ func TestRedisQueueAck(t *testing.T) {
 
 	job := NewJob()
 
-	err := q.Enqueue(job, &EnqueueOptions{
+	err := q.Enqueue(ctx, job, &EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
@@ -262,7 +266,7 @@ func TestRedisQueueAck(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, e)
 
-	err = q.Ack(job, &AckOptions{
+	err = q.Ack(ctx, job, &AckOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
@@ -282,7 +286,7 @@ func TestRedisQueueAck(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 0, e)
 
-	err = q.Ack(job, &AckOptions{
+	err = q.Ack(ctx, job, &AckOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
@@ -290,6 +294,7 @@ func TestRedisQueueAck(t *testing.T) {
 }
 
 func TestRedisQueueGetQueueMetrics(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -297,13 +302,13 @@ func TestRedisQueueGetQueueMetrics(t *testing.T) {
 
 	job := NewJob()
 
-	err := q.Enqueue(job, &EnqueueOptions{
+	err := q.Enqueue(ctx, job, &EnqueueOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 	})
 	require.NoError(t, err)
 
-	m, err := q.(MetricsExporter).GetQueueMetrics(&QueueMetricsOptions{
+	m, err := q.(MetricsExporter).GetQueueMetrics(ctx, &QueueMetricsOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 		At:        job.EnqueuedAt,
@@ -314,7 +319,7 @@ func TestRedisQueueGetQueueMetrics(t *testing.T) {
 	require.EqualValues(t, 1, m.ReadyTotal)
 	require.EqualValues(t, 0, m.ScheduledTotal)
 
-	m, err = q.(MetricsExporter).GetQueueMetrics(&QueueMetricsOptions{
+	m, err = q.(MetricsExporter).GetQueueMetrics(ctx, &QueueMetricsOptions{
 		Namespace: "{ns1}",
 		QueueID:   "q1",
 		At:        job.EnqueuedAt.Add(-time.Second),

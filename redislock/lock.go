@@ -22,7 +22,7 @@ type Lock struct {
 // Acquire creates the lock if possible.
 // If it is acquired, true is returned.
 // Call Release to unlock.
-func (l *Lock) Acquire() (bool, error) {
+func (l *Lock) Acquire(ctx context.Context) (bool, error) {
 	lockScript := redis.NewScript(`
 	local lock_key = ARGV[1]
 	local lock_id = ARGV[2]
@@ -42,7 +42,7 @@ func (l *Lock) Acquire() (bool, error) {
 	return 0
 	`)
 
-	acquired, err := lockScript.Run(context.Background(), l.Client, nil,
+	acquired, err := lockScript.Run(ctx, l.Client, nil,
 		l.Key,
 		l.ID,
 		l.At.Unix(),
@@ -56,14 +56,14 @@ func (l *Lock) Acquire() (bool, error) {
 }
 
 // Release clears the lock.
-func (l *Lock) Release() error {
+func (l *Lock) Release(ctx context.Context) error {
 	unlockScript := redis.NewScript(`
 	local lock_key = ARGV[1]
 	local lock_id = ARGV[2]
 
 	return redis.call("zrem", lock_key, lock_id)
 	`)
-	err := unlockScript.Run(context.Background(), l.Client, nil,
+	err := unlockScript.Run(ctx, l.Client, nil,
 		l.Key,
 		l.ID,
 	).Err()

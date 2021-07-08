@@ -1,6 +1,9 @@
 package work
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // QueueMetrics contains metrics from a queue.
 type QueueMetrics struct {
@@ -14,7 +17,7 @@ type QueueMetrics struct {
 
 // MetricsExporter can be implemented by Queue to report metrics.
 type MetricsExporter interface {
-	GetQueueMetrics(*QueueMetricsOptions) (*QueueMetrics, error)
+	GetQueueMetrics(context.Context, *QueueMetricsOptions) (*QueueMetrics, error)
 }
 
 // Metrics wraps metrics reported by MetricsExporter.

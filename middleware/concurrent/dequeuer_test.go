@@ -13,6 +13,7 @@ import (
 )
 
 func TestDequeuer(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -24,7 +25,7 @@ func TestDequeuer(t *testing.T) {
 		InvisibleSec: 60,
 	}
 	var called int
-	h := func(*work.DequeueOptions) (*work.Job, error) {
+	h := func(context.Context, *work.DequeueOptions) (*work.Job, error) {
 		called++
 		return work.NewJob(), nil
 	}
@@ -35,7 +36,7 @@ func TestDequeuer(t *testing.T) {
 			Max:      2,
 			workerID: fmt.Sprintf("w%d", i),
 		})
-		_, err := deq(h)(opt)
+		_, err := deq(h)(ctx, opt)
 
 		require.NoError(t, err)
 	}
@@ -50,7 +51,7 @@ func TestDequeuer(t *testing.T) {
 			workerID:      fmt.Sprintf("w%d", i),
 			disableUnlock: true,
 		})
-		_, err := deq(h)(opt)
+		_, err := deq(h)(ctx, opt)
 
 		if i <= 1 {
 			require.NoError(t, err)
@@ -85,7 +86,7 @@ func TestDequeuer(t *testing.T) {
 			workerID:      "w0",
 			disableUnlock: true,
 		})
-		_, err := deq(h)(&optLater)
+		_, err := deq(h)(ctx, &optLater)
 		require.Equal(t, work.ErrEmptyQueue, err)
 	}
 	require.Equal(t, 5, called)
@@ -113,7 +114,7 @@ func TestDequeuer(t *testing.T) {
 			workerID:      fmt.Sprintf("w%d", i),
 			disableUnlock: true,
 		})
-		_, err := deq(h)(&optExpired)
+		_, err := deq(h)(ctx, &optExpired)
 		if i < 5 {
 			require.NoError(t, err)
 		} else {
@@ -138,6 +139,7 @@ func TestDequeuer(t *testing.T) {
 }
 
 func BenchmarkConcurrency(b *testing.B) {
+	ctx := context.Background()
 	b.StopTimer()
 
 	client := redistest.NewClient()
@@ -155,14 +157,14 @@ func BenchmarkConcurrency(b *testing.B) {
 		Max:    1,
 	})
 	var called int
-	h := deq(func(*work.DequeueOptions) (*work.Job, error) {
+	h := deq(func(context.Context, *work.DequeueOptions) (*work.Job, error) {
 		called++
 		return work.NewJob(), nil
 	})
 
 	b.StartTimer()
 	for n := 0; n < b.N; n++ {
-		h(opt)
+		h(ctx, opt)
 	}
 	b.StopTimer()
 	require.Equal(b, b.N, called)
