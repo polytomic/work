@@ -8,11 +8,11 @@ import (
 	"github.com/taylorchu/work"
 )
 
-func (q *sidekiqQueue) ExternalEnqueue(job *work.Job, opt *work.EnqueueOptions) error {
-	return q.ExternalBulkEnqueue([]*work.Job{job}, opt)
+func (q *sidekiqQueue) ExternalEnqueue(ctx context.Context, job *work.Job, opt *work.EnqueueOptions) error {
+	return q.ExternalBulkEnqueue(ctx, []*work.Job{job}, opt)
 }
 
-func (q *sidekiqQueue) ExternalBulkEnqueue(jobs []*work.Job, opt *work.EnqueueOptions) error {
+func (q *sidekiqQueue) ExternalBulkEnqueue(ctx context.Context, jobs []*work.Job, opt *work.EnqueueOptions) error {
 	now := time.Now()
 	readyJobs := make([]*work.Job, 0, len(jobs))
 	scheduledJobs := make([]*work.Job, 0, len(jobs))
@@ -24,18 +24,18 @@ func (q *sidekiqQueue) ExternalBulkEnqueue(jobs []*work.Job, opt *work.EnqueueOp
 		}
 	}
 
-	err := q.externalBulkEnqueue(readyJobs, opt)
+	err := q.externalBulkEnqueue(ctx, readyJobs, opt)
 	if err != nil {
 		return err
 	}
-	err = q.externalBulkEnqueueIn(scheduledJobs, opt)
+	err = q.externalBulkEnqueueIn(ctx, scheduledJobs, opt)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (q *sidekiqQueue) externalBulkEnqueue(jobs []*work.Job, opt *work.EnqueueOptions) error {
+func (q *sidekiqQueue) externalBulkEnqueue(ctx context.Context, jobs []*work.Job, opt *work.EnqueueOptions) error {
 	if len(jobs) == 0 {
 		return nil
 	}
@@ -61,10 +61,10 @@ func (q *sidekiqQueue) externalBulkEnqueue(jobs []*work.Job, opt *work.EnqueueOp
 		}
 		args[2+i] = jobm
 	}
-	return q.enqueueScript.Run(context.Background(), q.client, nil, args...).Err()
+	return q.enqueueScript.Run(ctx, q.client, nil, args...).Err()
 }
 
-func (q *sidekiqQueue) externalBulkEnqueueIn(jobs []*work.Job, opt *work.EnqueueOptions) error {
+func (q *sidekiqQueue) externalBulkEnqueueIn(ctx context.Context, jobs []*work.Job, opt *work.EnqueueOptions) error {
 	if len(jobs) == 0 {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (q *sidekiqQueue) externalBulkEnqueueIn(jobs []*work.Job, opt *work.Enqueue
 		args[1+2*i] = job.EnqueuedAt.Unix()
 		args[1+2*i+1] = jobm
 	}
-	return q.enqueueInScript.Run(context.Background(), q.client, nil, args...).Err()
+	return q.enqueueInScript.Run(ctx, q.client, nil, args...).Err()
 }
 
 var (

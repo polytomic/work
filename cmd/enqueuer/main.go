@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 
@@ -24,7 +25,7 @@ func main() {
 
 	job := work.NewJob()
 	job.MarshalPayload(flag.Args())
-	err = queue.Enqueue(job, &work.EnqueueOptions{
+	err = queue.Enqueue(context.Background(), job, &work.EnqueueOptions{
 		Namespace: *namespace,
 		QueueID:   "cmd_queue",
 	})

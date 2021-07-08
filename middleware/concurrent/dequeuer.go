@@ -1,6 +1,7 @@
 package concurrent
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/go-redis/redis/v8"
@@ -25,7 +26,7 @@ func Dequeuer(copt *DequeuerOptions) work.DequeueMiddleware {
 		if workerID == "" {
 			workerID = uuid.NewString()
 		}
-		return func(opt *work.DequeueOptions) (*work.Job, error) {
+		return func(ctx context.Context, opt *work.DequeueOptions) (*work.Job, error) {
 			lock := &redislock.Lock{
 				Client:       copt.Client,
 				Key:          fmt.Sprintf("%s:lock:%s", opt.Namespace, opt.QueueID),
@@ -34,7 +35,7 @@ func Dequeuer(copt *DequeuerOptions) work.DequeueMiddleware {
 				ExpireInSec:  opt.InvisibleSec,
 				MaxAcquirers: copt.Max,
 			}
-			acquired, err := lock.Acquire()
+			acquired, err := lock.Acquire(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -42,9 +43,9 @@ func Dequeuer(copt *DequeuerOptions) work.DequeueMiddleware {
 				return nil, work.ErrEmptyQueue
 			}
 			if !copt.disableUnlock {
-				defer lock.Release()
+				defer lock.Release(ctx)
 			}
-			return f(opt)
+			return f(ctx, opt)
 		}
 	}
 }

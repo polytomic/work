@@ -175,13 +175,13 @@ func FormatQueueID(queue, class string) string {
 	return fmt.Sprintf("%s/%s", queue, class)
 }
 
-func (q *sidekiqQueue) schedule(ns string, at time.Time) error {
-	return q.scheduleScript.Run(context.Background(), q.client, nil, ns, at.Unix()).Err()
+func (q *sidekiqQueue) schedule(ctx context.Context, ns string, at time.Time) error {
+	return q.scheduleScript.Run(ctx, q.client, nil, ns, at.Unix()).Err()
 }
 
 // JobPuller pulls jobs from sidekiq-compatible queue.
 type JobPuller interface {
-	Pull(*PullOptions) error
+	Pull(context.Context, *PullOptions) error
 }
 
 // PullOptions specifies how a job is pulled from sidekiq-compatible queue.
@@ -204,12 +204,12 @@ func (opt *PullOptions) Validate() error {
 }
 
 // Pull moves jobs from sidekiq-compatible queue into work-compatible queue.
-func (q *sidekiqQueue) Pull(opt *PullOptions) error {
+func (q *sidekiqQueue) Pull(ctx context.Context, opt *PullOptions) error {
 	err := opt.Validate()
 	if err != nil {
 		return err
 	}
-	res, err := q.dequeueScript.Run(context.Background(), q.client, nil,
+	res, err := q.dequeueScript.Run(ctx, q.client, nil,
 		opt.SidekiqNamespace,
 		opt.SidekiqQueue,
 	).Result()
@@ -233,7 +233,7 @@ func (q *sidekiqQueue) Pull(opt *PullOptions) error {
 			if err != nil {
 				return err
 			}
-			err = q.redisQueue.Enqueue(job, &work.EnqueueOptions{
+			err = q.redisQueue.Enqueue(ctx, job, &work.EnqueueOptions{
 				Namespace: opt.Namespace,
 				QueueID:   FormatQueueID(sqJob.Queue, sqJob.Class),
 			})

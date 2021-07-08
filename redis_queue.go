@@ -137,11 +137,11 @@ func NewRedisQueue(client redis.UniversalClient) Queue {
 	}
 }
 
-func (q *redisQueue) Enqueue(job *Job, opt *EnqueueOptions) error {
-	return q.BulkEnqueue([]*Job{job}, opt)
+func (q *redisQueue) Enqueue(ctx context.Context, job *Job, opt *EnqueueOptions) error {
+	return q.BulkEnqueue(ctx, []*Job{job}, opt)
 }
 
-func (q *redisQueue) BulkEnqueue(jobs []*Job, opt *EnqueueOptions) error {
+func (q *redisQueue) BulkEnqueue(ctx context.Context, jobs []*Job, opt *EnqueueOptions) error {
 	err := opt.Validate()
 	if err != nil {
 		return err
@@ -161,23 +161,23 @@ func (q *redisQueue) BulkEnqueue(jobs []*Job, opt *EnqueueOptions) error {
 		args[2+3*i+1] = job.ID
 		args[2+3*i+2] = jobm
 	}
-	return q.enqueueScript.Run(context.Background(), q.client, scriptKey(opt.Namespace, opt.QueueID), args...).Err()
+	return q.enqueueScript.Run(ctx, q.client, scriptKey(opt.Namespace, opt.QueueID), args...).Err()
 }
 
-func (q *redisQueue) Dequeue(opt *DequeueOptions) (*Job, error) {
-	jobs, err := q.BulkDequeue(1, opt)
+func (q *redisQueue) Dequeue(ctx context.Context, opt *DequeueOptions) (*Job, error) {
+	jobs, err := q.BulkDequeue(ctx, 1, opt)
 	if err != nil {
 		return nil, err
 	}
 	return jobs[0], nil
 }
 
-func (q *redisQueue) BulkDequeue(count int64, opt *DequeueOptions) ([]*Job, error) {
+func (q *redisQueue) BulkDequeue(ctx context.Context, count int64, opt *DequeueOptions) ([]*Job, error) {
 	err := opt.Validate()
 	if err != nil {
 		return nil, err
 	}
-	res, err := q.dequeueScript.Run(context.Background(), q.client, scriptKey(opt.Namespace, opt.QueueID),
+	res, err := q.dequeueScript.Run(ctx, q.client, scriptKey(opt.Namespace, opt.QueueID),
 		opt.Namespace,
 		opt.QueueID,
 		opt.At.Unix(),
@@ -203,11 +203,11 @@ func (q *redisQueue) BulkDequeue(count int64, opt *DequeueOptions) ([]*Job, erro
 	return jobs, nil
 }
 
-func (q *redisQueue) Ack(job *Job, opt *AckOptions) error {
-	return q.BulkAck([]*Job{job}, opt)
+func (q *redisQueue) Ack(ctx context.Context, job *Job, opt *AckOptions) error {
+	return q.BulkAck(ctx, []*Job{job}, opt)
 }
 
-func (q *redisQueue) BulkAck(jobs []*Job, opt *AckOptions) error {
+func (q *redisQueue) BulkAck(ctx context.Context, jobs []*Job, opt *AckOptions) error {
 	err := opt.Validate()
 	if err != nil {
 		return err
@@ -221,10 +221,10 @@ func (q *redisQueue) BulkAck(jobs []*Job, opt *AckOptions) error {
 	for i, job := range jobs {
 		args[2+i] = job.ID
 	}
-	return q.ackScript.Run(context.Background(), q.client, scriptKey(opt.Namespace, opt.QueueID), args...).Err()
+	return q.ackScript.Run(ctx, q.client, scriptKey(opt.Namespace, opt.QueueID), args...).Err()
 }
 
-func (q *redisQueue) BulkFind(jobIDs []string, opt *FindOptions) ([]*Job, error) {
+func (q *redisQueue) BulkFind(ctx context.Context, jobIDs []string, opt *FindOptions) ([]*Job, error) {
 	err := opt.Validate()
 	if err != nil {
 		return nil, err
@@ -237,7 +237,7 @@ func (q *redisQueue) BulkFind(jobIDs []string, opt *FindOptions) ([]*Job, error)
 	for i, jobID := range jobIDs {
 		args[1+i] = jobID
 	}
-	res, err := q.findScript.Run(context.Background(), q.client, scriptKey(opt.Namespace, jobIDs[0]), args...).Result()
+	res, err := q.findScript.Run(ctx, q.client, scriptKey(opt.Namespace, jobIDs[0]), args...).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -264,18 +264,18 @@ var (
 	_ BulkJobFinder   = (*redisQueue)(nil)
 )
 
-func (q *redisQueue) GetQueueMetrics(opt *QueueMetricsOptions) (*QueueMetrics, error) {
+func (q *redisQueue) GetQueueMetrics(ctx context.Context, opt *QueueMetricsOptions) (*QueueMetrics, error) {
 	err := opt.Validate()
 	if err != nil {
 		return nil, err
 	}
 	queueKey := fmt.Sprintf("%s:queue:%s", opt.Namespace, opt.QueueID)
 	now := fmt.Sprint(opt.At.Unix())
-	readyTotal, err := q.client.ZCount(context.Background(), queueKey, "-inf", now).Result()
+	readyTotal, err := q.client.ZCount(ctx, queueKey, "-inf", now).Result()
 	if err != nil {
 		return nil, err
 	}
-	scheduledTotal, err := q.client.ZCount(context.Background(), queueKey, "("+now, "+inf").Result()
+	scheduledTotal, err := q.client.ZCount(ctx, queueKey, "("+now, "+inf").Result()
 	if err != nil {
 		return nil, err
 	}

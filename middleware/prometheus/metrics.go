@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -70,12 +71,12 @@ func init() {
 }
 
 // HandleFuncMetrics adds prometheus metrics like executed job count.
-func HandleFuncMetrics(f work.HandleFunc) work.HandleFunc {
-	return func(job *work.Job, opt *work.DequeueOptions) error {
+func HandleFuncMetrics(f work.ContextHandleFunc) work.ContextHandleFunc {
+	return func(ctx context.Context, job *work.Job, opt *work.DequeueOptions) error {
 		jobBusy.WithLabelValues(opt.Namespace, opt.QueueID).Inc()
 		defer jobBusy.WithLabelValues(opt.Namespace, opt.QueueID).Dec()
 		startTime := time.Now()
-		err := f(job, opt)
+		err := f(ctx, job, opt)
 		if err != nil {
 			jobExecutedTotal.WithLabelValues(opt.Namespace, opt.QueueID, "failure").Inc()
 			return err
@@ -88,8 +89,8 @@ func HandleFuncMetrics(f work.HandleFunc) work.HandleFunc {
 
 // EnqueueFuncMetrics adds prometheus metrics like enqueued job count.
 func EnqueueFuncMetrics(f work.EnqueueFunc) work.EnqueueFunc {
-	return func(job *work.Job, opt *work.EnqueueOptions) error {
-		err := f(job, opt)
+	return func(ctx context.Context, job *work.Job, opt *work.EnqueueOptions) error {
+		err := f(ctx, job, opt)
 		if err != nil {
 			jobEnqueuedTotal.WithLabelValues(opt.Namespace, opt.QueueID, "failure").Inc()
 			return err
@@ -100,8 +101,8 @@ func EnqueueFuncMetrics(f work.EnqueueFunc) work.EnqueueFunc {
 }
 
 // ExportWorkerMetrics adds prometheus metrics from work.Worker.
-func ExportWorkerMetrics(w *work.Worker) error {
-	all, err := w.ExportMetrics()
+func ExportWorkerMetrics(ctx context.Context, w *work.Worker) error {
+	all, err := w.ExportMetrics(ctx)
 	if err != nil {
 		return err
 	}

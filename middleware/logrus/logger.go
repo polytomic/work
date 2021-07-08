@@ -1,6 +1,7 @@
 package logrus
 
 import (
+	"context"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -8,15 +9,15 @@ import (
 )
 
 // HandleFuncLogger logs job execution with logrus structured logger.
-func HandleFuncLogger(f work.HandleFunc) work.HandleFunc {
-	return func(job *work.Job, opt *work.DequeueOptions) error {
+func HandleFuncLogger(f work.ContextHandleFunc) work.ContextHandleFunc {
+	return func(ctx context.Context, job *work.Job, opt *work.DequeueOptions) error {
 		logger := logrus.WithFields(logrus.Fields{
 			"queue":     opt.QueueID,
 			"namespace": opt.Namespace,
 			"job":       job.ID,
 		})
 		startTime := time.Now()
-		err := f(job, opt)
+		err := f(ctx, job, opt)
 		if err != nil {
 			logger.WithFields(logrus.Fields{
 				"last_error": job.LastError,
@@ -34,13 +35,13 @@ func HandleFuncLogger(f work.HandleFunc) work.HandleFunc {
 
 // EnqueueFuncLogger logs job enqueuing with logrus structured logger.
 func EnqueueFuncLogger(f work.EnqueueFunc) work.EnqueueFunc {
-	return func(job *work.Job, opt *work.EnqueueOptions) error {
+	return func(ctx context.Context, job *work.Job, opt *work.EnqueueOptions) error {
 		logger := logrus.WithFields(logrus.Fields{
 			"queue":     opt.QueueID,
 			"namespace": opt.Namespace,
 			"job":       job.ID,
 		})
-		err := f(job, opt)
+		err := f(ctx, job, opt)
 		if err != nil {
 			logger.WithError(err).Error("Job failed to enqueue.")
 			return err

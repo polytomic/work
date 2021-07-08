@@ -57,7 +57,7 @@ func TestWorkerExportMetrics(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	all, err := w.ExportMetrics()
+	all, err := w.ExportMetrics(context.Background())
 	require.NoError(t, err)
 	require.Len(t, all.Queue, 1)
 	require.Equal(t, all.Queue[0].Namespace, "{ns1}")
@@ -96,6 +96,7 @@ func waitEmpty(client redis.UniversalClient, key string, timeout time.Duration) 
 }
 
 func TestWorkerRunJobMultiQueue(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -146,7 +147,7 @@ func TestWorkerRunJobMultiQueue(t *testing.T) {
 		err := job.MarshalPayload(message{Text: "test1"})
 		require.NoError(t, err)
 
-		err = w.opt.Queue.Enqueue(job, &EnqueueOptions{
+		err = w.opt.Queue.Enqueue(ctx, job, &EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "test1",
 		})
@@ -158,7 +159,7 @@ func TestWorkerRunJobMultiQueue(t *testing.T) {
 		err := job.MarshalPayload(message{Text: "test2"})
 		require.NoError(t, err)
 
-		err = w.opt.Queue.Enqueue(job, &EnqueueOptions{
+		err = w.opt.Queue.Enqueue(ctx, job, &EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "test2",
 		})
@@ -190,6 +191,7 @@ func TestWorkerRunJobMultiQueue(t *testing.T) {
 }
 
 func TestWorkerRunJob(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -236,7 +238,7 @@ func TestWorkerRunJob(t *testing.T) {
 		err := job.MarshalPayload(message{Text: "hello"})
 		require.NoError(t, err)
 
-		err = w.opt.Queue.Enqueue(job, &EnqueueOptions{
+		err = w.opt.Queue.Enqueue(ctx, job, &EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "success",
 		})
@@ -261,7 +263,7 @@ func TestWorkerRunJob(t *testing.T) {
 		err := job.MarshalPayload(message{Text: "hello"})
 		require.NoError(t, err)
 
-		err = w.opt.Queue.Enqueue(job, &EnqueueOptions{
+		err = w.opt.Queue.Enqueue(ctx, job, &EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "failure",
 		})
@@ -282,7 +284,7 @@ func TestWorkerRunJob(t *testing.T) {
 	require.EqualValues(t, 3, count)
 
 	for i := 0; i < 3; i++ {
-		job, err := NewRedisQueue(client).Dequeue(&DequeueOptions{
+		job, err := NewRedisQueue(client).Dequeue(ctx, &DequeueOptions{
 			Namespace:    "{ns1}",
 			QueueID:      "failure",
 			At:           time.Now().Add(time.Hour),
@@ -298,7 +300,7 @@ func TestWorkerRunJob(t *testing.T) {
 		err := job.MarshalPayload(message{Text: "hello"})
 		require.NoError(t, err)
 
-		err = w.opt.Queue.Enqueue(job, &EnqueueOptions{
+		err = w.opt.Queue.Enqueue(ctx, job, &EnqueueOptions{
 			Namespace: "{ns1}",
 			QueueID:   "panic",
 		})
@@ -319,7 +321,7 @@ func TestWorkerRunJob(t *testing.T) {
 	require.EqualValues(t, 3, count)
 
 	for i := 0; i < 3; i++ {
-		job, err := NewRedisQueue(client).Dequeue(&DequeueOptions{
+		job, err := NewRedisQueue(client).Dequeue(ctx, &DequeueOptions{
 			Namespace:    "{ns1}",
 			QueueID:      "panic",
 			At:           time.Now().Add(time.Hour),
@@ -337,10 +339,11 @@ func TestWorkerRunOnce(t *testing.T) {
 	require.NoError(t, redistest.Reset(client))
 
 	job := NewJob()
-	err := NewRedisQueue(client).Enqueue(job, &EnqueueOptions{
-		Namespace: "{ns1}",
-		QueueID:   "success",
-	})
+	err := NewRedisQueue(client).Enqueue(context.Background(),
+		job, &EnqueueOptions{
+			Namespace: "{ns1}",
+			QueueID:   "success",
+		})
 	require.NoError(t, err)
 
 	count, err := client.ZCard(context.Background(), "{ns1}:queue:success").Result()
@@ -348,10 +351,11 @@ func TestWorkerRunOnce(t *testing.T) {
 	require.EqualValues(t, 1, count)
 
 	job2 := NewJob()
-	err = NewRedisQueue(client).Enqueue(job2, &EnqueueOptions{
-		Namespace: "{ns1}",
-		QueueID:   "failure",
-	})
+	err = NewRedisQueue(client).Enqueue(context.Background(),
+		job2, &EnqueueOptions{
+			Namespace: "{ns1}",
+			QueueID:   "failure",
+		})
 	require.NoError(t, err)
 
 	count, err = client.ZCard(context.Background(), "{ns1}:queue:failure").Result()
@@ -359,10 +363,11 @@ func TestWorkerRunOnce(t *testing.T) {
 	require.EqualValues(t, 1, count)
 
 	job3 := NewJob()
-	err = NewRedisQueue(client).Enqueue(job3, &EnqueueOptions{
-		Namespace: "{ns1}",
-		QueueID:   "panic",
-	})
+	err = NewRedisQueue(client).Enqueue(context.Background(),
+		job3, &EnqueueOptions{
+			Namespace: "{ns1}",
+			QueueID:   "panic",
+		})
 	require.NoError(t, err)
 
 	count, err = client.ZCard(context.Background(), "{ns1}:queue:panic").Result()
@@ -420,6 +425,7 @@ func TestWorkerRunOnce(t *testing.T) {
 }
 
 func TestRetry(t *testing.T) {
+	ctx := context.Background()
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))
@@ -431,10 +437,10 @@ func TestRetry(t *testing.T) {
 		InvisibleSec: 10,
 	}
 	retrier := retry(NewRedisQueue(client), defaultBackoff())
-	h := retrier(func(*Job, *DequeueOptions) error {
+	h := retrier(func(context.Context, *Job, *DequeueOptions) error {
 		return ErrUnrecoverable
 	})
-	err := h(job, opt)
+	err := h(ctx, job, opt)
 	require.NoError(t, err)
 
 	require.EqualValues(t, 0, job.Retries)
@@ -450,10 +456,10 @@ func TestRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, z, 0)
 
-	h = retrier(func(*Job, *DequeueOptions) error {
+	h = retrier(func(context.Context, *Job, *DequeueOptions) error {
 		return fmt.Errorf("recoverable, but not retried: %w", ErrDoNotRetry)
 	})
-	err = h(job, opt)
+	err = h(ctx, job, opt)
 	require.Error(t, err)
 
 	require.EqualValues(t, 0, job.Retries)
@@ -462,10 +468,10 @@ func TestRetry(t *testing.T) {
 	var delays []int64
 	for i := 1; i <= 10; i++ {
 		retryErr := fmt.Errorf("error %d", i)
-		h = retrier(func(*Job, *DequeueOptions) error {
+		h = retrier(func(context.Context, *Job, *DequeueOptions) error {
 			return retryErr
 		})
-		err = h(job, opt)
+		err = h(ctx, job, opt)
 		require.Error(t, err)
 		require.Equal(t, retryErr, err)
 
