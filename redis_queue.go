@@ -24,8 +24,17 @@ func scriptKey(ns, queueID string) []string {
 	return []string{strings.Join([]string{ns, "queue", queueID}, ":")}
 }
 
+// RedisQueue implements Queue with other additional capabilities
+type RedisQueue interface {
+	Queue
+	BulkEnqueuer
+	BulkDequeuer
+	BulkJobFinder
+	MetricsExporter
+}
+
 // NewRedisQueue creates a new queue stored in redis.
-func NewRedisQueue(client redis.UniversalClient) Queue {
+func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 	enqueueScript := redis.NewScript(`
 	local ns = ARGV[1]
 	local queue_id = ARGV[2]
@@ -256,13 +265,6 @@ func (q *redisQueue) BulkFind(jobIDs []string, opt *FindOptions) ([]*Job, error)
 	}
 	return jobs, nil
 }
-
-var (
-	_ MetricsExporter = (*redisQueue)(nil)
-	_ BulkEnqueuer    = (*redisQueue)(nil)
-	_ BulkDequeuer    = (*redisQueue)(nil)
-	_ BulkJobFinder   = (*redisQueue)(nil)
-)
 
 func (q *redisQueue) GetQueueMetrics(opt *QueueMetricsOptions) (*QueueMetrics, error) {
 	err := opt.Validate()
