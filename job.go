@@ -232,12 +232,16 @@ type BulkDequeuer interface {
 // FindOptions specifies how a job is searched from a queue.
 type FindOptions struct {
 	Namespace string
+	QueueID   string
 }
 
 // Validate validates FindOptions.
 func (opt *FindOptions) Validate() error {
 	if opt.Namespace == "" {
 		return ErrEmptyNamespace
+	}
+	if opt.QueueID == "" {
+		return ErrEmptyQueueID
 	}
 	return nil
 }
