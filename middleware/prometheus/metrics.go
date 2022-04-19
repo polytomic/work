@@ -56,6 +56,14 @@ var (
 		},
 		[]string{"namespace", "queue"},
 	)
+	jobLatencySeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "work",
+			Name:      "job_latency_seconds",
+			Help:      "Processing delay from oldest ready job",
+		},
+		[]string{"namespace", "queue"},
+	)
 )
 
 func init() {
@@ -67,6 +75,7 @@ func init() {
 
 	prometheus.MustRegister(jobReady)
 	prometheus.MustRegister(jobScheduled)
+	prometheus.MustRegister(jobLatencySeconds)
 }
 
 // HandleFuncMetrics adds prometheus metrics like executed job count.
@@ -99,6 +108,14 @@ func EnqueueFuncMetrics(f work.EnqueueFunc) work.EnqueueFunc {
 	}
 }
 
+// ExportQueueMetrics adds prometheus metrics from work.QueueMetrics directly.
+func ExportQueueMetrics(m *work.QueueMetrics) error {
+	jobReady.WithLabelValues(m.Namespace, m.QueueID).Set(float64(m.ReadyTotal))
+	jobScheduled.WithLabelValues(m.Namespace, m.QueueID).Set(float64(m.ScheduledTotal))
+	jobLatencySeconds.WithLabelValues(m.Namespace, m.QueueID).Observe(m.Latency.Seconds())
+	return nil
+}
+
 // ExportWorkerMetrics adds prometheus metrics from Worker.
 func ExportWorkerMetrics(w *work.Worker) error {
 	all, err := w.ExportMetrics()
@@ -106,8 +123,10 @@ func ExportWorkerMetrics(w *work.Worker) error {
 		return err
 	}
 	for _, m := range all.Queue {
-		jobReady.WithLabelValues(m.Namespace, m.QueueID).Set(float64(m.ReadyTotal))
-		jobScheduled.WithLabelValues(m.Namespace, m.QueueID).Set(float64(m.ScheduledTotal))
+		err := ExportQueueMetrics(m)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
