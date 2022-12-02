@@ -20,6 +20,13 @@ type redisQueue struct {
 	metricScript  *redis.Script
 }
 
+// scriptKey returns a slice of strings containing at least one of the keys to
+// be used by a script. This allows Redis route our script execution to the
+// correct node in the event we're using a namespace.
+func scriptKey(ns, queueID string) []string {
+	return []string{strings.Join([]string{ns, "queue", queueID}, ":")}
+}
+
 // RedisQueue implements Queue with other additional capabilities
 type RedisQueue interface {
 	Queue
@@ -49,7 +56,7 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 		local at = tonumber(ARGV[i])
 		local job_id = ARGV[i+1]
 		local jobm = ARGV[i+2]
-		local job_key = table.concat({ns, "job", job_id}, ":")
+		local job_key = table.concat({ns, "queue", queue_id, "job", job_id}, ":")
 
 		-- update job fields
 		redis.call("hset", job_key, "msgpack", jobm)
@@ -115,7 +122,7 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 
 	for i = 3,table.getn(ARGV) do
 		local job_id = ARGV[i]
-		local job_key = table.concat({ns, "job", job_id}, ":")
+		local job_key = table.concat({ns, "queue", queue_id, "job", job_id}, ":")
 
 		-- delete job fields
 		table.insert(del_args, job_key)
@@ -129,10 +136,11 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 
 	findScript := redis.NewScript(`
 	local ns = ARGV[1]
+	local queue_id = ARGV[2]
 	local ret = {}
-	for i = 2,table.getn(ARGV) do
+	for i = 3,table.getn(ARGV) do
 		local job_id = ARGV[i]
-		local job_key = table.concat({ns, "job", job_id}, ":")
+		local job_key = table.concat({ns, "queue", queue_id, "job", job_id}, ":")
 		local jobm = redis.call("hget", job_key, "msgpack")
 
 		table.insert(ret, jobm)
@@ -267,10 +275,11 @@ func (q *redisQueue) BulkFind(jobIDs []string, opt *FindOptions) ([]*Job, error)
 	if len(jobIDs) == 0 {
 		return nil, nil
 	}
-	args := make([]interface{}, 1+len(jobIDs))
+	args := make([]interface{}, 2+len(jobIDs))
 	args[0] = opt.Namespace
+	args[1] = opt.QueueID
 	for i, jobID := range jobIDs {
-		args[1+i] = jobID
+		args[2+i] = jobID
 	}
 	res, err := q.findScript.Run(context.Background(), q.client, scriptKey(opt.Namespace, jobIDs[0]), args...).Result()
 	if err != nil {
