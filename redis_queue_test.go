@@ -454,9 +454,9 @@ func TestRedisQueueEnqueueGuardDoesNotDemote(t *testing.T) {
 }
 
 func TestRedisQueueEnqueueAllowPromotionDemotes(t *testing.T) {
-	// AllowPromotion=true opts the job out of the GT guard so the worker
-	// retry path can lower the score from the Dequeue InvisibleSec mark
-	// back down to now + backoff.
+	// AllowPromotion=true opts the job out of the GT guard so an explicit
+	// opt-in retry flow can lower the score from the Dequeue InvisibleSec
+	// mark back down to now + backoff.
 	client := redistest.NewClient()
 	defer client.Close()
 	require.NoError(t, redistest.Reset(client))

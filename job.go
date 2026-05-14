@@ -42,12 +42,12 @@ type Job struct {
 	// PromoteJob from demoting a job whose score has been bumped to
 	// now + InvisibleSec by Dequeue.
 	//
-	// When true, both operations use ZADD XX (no GT). Backoff-based
-	// rescheduling from the worker retry path may then lower the score so
-	// the configured Backoff actually takes effect, and PromoteJob may
-	// advance a scheduled-but-pending job to now. The caller is responsible
-	// for ensuring this is safe — typically that the job has a unique ID
-	// and is not relied on for dedup-deferral.
+	// When true, both operations use ZADD XX (no GT). This lets an
+	// explicit caller lower the score, for example in an opt-in retry flow
+	// where backoff should override Dequeue's InvisibleSec mark, and lets
+	// PromoteJob advance a scheduled-but-pending job to now. The caller is
+	// responsible for ensuring this is safe — typically that the job has a
+	// unique ID and is not relied on for dedup-deferral.
 	AllowPromotion bool `msgpack:"-" json:",omitempty"`
 }
 

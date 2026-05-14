@@ -61,8 +61,8 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 	-- Per-job AllowPromotion (passed alongside each job) selects between
 	-- two ZADD variants. Guarded entries use ZADD ... gt so a duplicate
 	-- enqueue cannot demote an already-deferred deterministic-ID job;
-	-- promoted entries use plain ZADD so worker retry backoff can lower
-	-- the score below the InvisibleSec mark set by Dequeue.
+	-- promoted entries use plain ZADD so an explicit opt-in caller can
+	-- lower the score below the InvisibleSec mark set by Dequeue.
 	local guarded_args = {}
 	local promoted_args = {}
 
