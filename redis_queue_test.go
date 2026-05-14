@@ -611,3 +611,45 @@ func TestRedisQueuePromoteJobDoesNotDemote(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, scoreAfterDequeue, scoreAfterPromote)
 }
+
+func TestRedisQueuePromoteJobMissingAllowPromotionDoesNotDemote(t *testing.T) {
+	client := redistest.NewClient()
+	defer client.Close()
+	require.NoError(t, redistest.Reset(client))
+	q := NewRedisQueue(client)
+
+	job := NewJob()
+	job.EnqueuedAt = time.Now()
+
+	opts := &EnqueueOptions{
+		Namespace: "{ns1}",
+		QueueID:   "q1",
+	}
+
+	require.NoError(t, q.Enqueue(job, opts))
+
+	jobKey := fmt.Sprintf("{ns1}:job:%s", job.ID)
+	require.NoError(t, client.HDel(context.Background(), jobKey, "allow_promotion").Err())
+
+	dequeuedJob, err := q.Dequeue(&DequeueOptions{
+		Namespace:    "{ns1}",
+		QueueID:      "q1",
+		At:           time.Now(),
+		InvisibleSec: 60,
+	})
+	require.NoError(t, err)
+	require.Equal(t, job.ID, dequeuedJob.ID)
+
+	queueKey := "{ns1}:queue:q1"
+	scoreAfterDequeue, err := client.ZScore(context.Background(), queueKey, jobKey).Result()
+	require.NoError(t, err)
+
+	require.NoError(t, q.PromoteJob(job.ID, &PromoteOptions{
+		Namespace: opts.Namespace,
+		QueueID:   opts.QueueID,
+	}))
+
+	scoreAfterPromote, err := client.ZScore(context.Background(), queueKey, jobKey).Result()
+	require.NoError(t, err)
+	require.Equal(t, scoreAfterDequeue, scoreAfterPromote)
+}

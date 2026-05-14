@@ -412,10 +412,9 @@ func (q *redisQueue) PromoteJob(jobID string, opt *PromoteOptions) error {
 	// the XX flag below would prevent (re-)adding it anyway, so a missing
 	// hash is treated as a no-op rather than an error.
 	allowPromotion, err := q.client.HGet(context.Background(), jobKey, "allow_promotion").Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil
-		}
+	if errors.Is(err, redis.Nil) {
+		allowPromotion = ""
+	} else if err != nil {
 		return err
 	}
 
