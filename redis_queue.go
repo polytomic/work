@@ -10,8 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func batchSlice(n int) [][]int {
-	const size = 1000
+func batchSliceWithSize(n int, size int) [][]int {
 	var batches [][]int
 	for i := 0; i < n; i += size {
 		j := i + size
@@ -21,6 +20,11 @@ func batchSlice(n int) [][]int {
 		batches = append(batches, []int{i, j})
 	}
 	return batches
+}
+
+func batchSlice(n int) [][]int {
+	const size = 1000
+	return batchSliceWithSize(n, size)
 }
 
 type redisQueue struct {
@@ -242,7 +246,11 @@ func (q *redisQueue) Enqueue(job *Job, opt *EnqueueOptions) error {
 }
 
 func (q *redisQueue) BulkEnqueue(jobs []*Job, opt *EnqueueOptions) error {
-	for _, batch := range batchSlice(len(jobs)) {
+	// Keep the total script ARGV count within the previous 3-args-per-job budget.
+	// bulkEnqueueSmallBatch now sends 4 values per job, so the maximum safe batch
+	// size is 1000 * 3 / 4 = 750 jobs.
+	const bulkEnqueueBatchSize = 750
+	for _, batch := range batchSliceWithSize(len(jobs), bulkEnqueueBatchSize) {
 		err := q.bulkEnqueueSmallBatch(jobs[batch[0]:batch[1]], opt)
 		if err != nil {
 			return err
