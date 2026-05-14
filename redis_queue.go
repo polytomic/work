@@ -30,6 +30,7 @@ type redisQueue struct {
 	dequeueScript *redis.Script
 	ackScript     *redis.Script
 	findScript    *redis.Script
+	promoteScript *redis.Script
 	metricScript  *redis.Script
 }
 
@@ -118,7 +119,6 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 
 	for i, job_key in pairs(job_keys) do
 		local jobm = redis.call("hget", job_key, "msgpack")
-		local allow_promotion = redis.call("hget", job_key, "allow_promotion")
 
 		-- job is deleted unexpectedly
 		if jobm == false then
@@ -129,7 +129,7 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 				table.insert(zadd_args, at + invis_sec)
 				table.insert(zadd_args, job_key)
 			end
-			table.insert(ret, {jobm, allow_promotion})
+			table.insert(ret, jobm)
 		end
 	end
 	if table.getn(zadd_args) > 0 then
@@ -174,15 +174,34 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 		local job_id = ARGV[i]
 		local job_key = table.concat({ns, "job", job_id}, ":")
 		local jobm = redis.call("hget", job_key, "msgpack")
-		local allow_promotion = redis.call("hget", job_key, "allow_promotion")
 
-		if jobm == false then
-			table.insert(ret, false)
-		else
-			table.insert(ret, {jobm, allow_promotion})
-		end
+		table.insert(ret, jobm)
 	end
 	return ret
+	`)
+
+	// PromoteJob is read-then-write (HGET allow_promotion, then ZADD)
+	// done atomically in a single script so an Ack + re-enqueue between
+	// the two operations cannot let a stale "AllowPromotion=true" read
+	// demote a freshly-enqueued job whose owner did not opt in.
+	promoteScript := redis.NewScript(`
+	local ns = ARGV[1]
+	local queue_id = ARGV[2]
+	local job_id = ARGV[3]
+	local at = ARGV[4]
+	local queue_key = table.concat({ns, "queue", queue_id}, ":")
+	local job_key = table.concat({ns, "job", job_id}, ":")
+
+	-- XX always: never (re-)add a job whose hash is gone (Ack'd or never
+	-- enqueued). GT only when the job did not opt into promotion — without
+	-- GT, an explicit caller can lower the score from Dequeue's
+	-- InvisibleSec mark back down to now.
+	local allow_promotion = redis.call("hget", job_key, "allow_promotion")
+	if allow_promotion == "1" then
+		return redis.call("zadd", queue_key, "XX", at, job_key)
+	else
+		return redis.call("zadd", queue_key, "XX", "GT", at, job_key)
+	end
 	`)
 
 	metricScript := redis.NewScript(`
@@ -213,6 +232,7 @@ func NewRedisQueue(client redis.UniversalClient) RedisQueue {
 		dequeueScript: dequeueScript,
 		ackScript:     ackScript,
 		findScript:    findScript,
+		promoteScript: promoteScript,
 		metricScript:  metricScript,
 	}
 }
@@ -300,12 +320,12 @@ func (q *redisQueue) bulkDequeueSmallBatch(count int64, opt *DequeueOptions) ([]
 	jobm := res.([]interface{})
 	jobs := make([]*Job, len(jobm))
 	for i, iface := range jobm {
-		jobFields := iface.([]interface{})
-		job, err := jobFromRedisFields(jobFields)
+		var job Job
+		err := unmarshal(strings.NewReader(iface.(string)), &job)
 		if err != nil {
 			return nil, err
 		}
-		jobs[i] = job
+		jobs[i] = &job
 	}
 	return jobs, nil
 }
@@ -373,18 +393,15 @@ func (q *redisQueue) bulkFindSmallBatch(jobIDs []string, opt *FindOptions) ([]*J
 	jobm := res.([]interface{})
 	jobs := make([]*Job, len(jobm))
 	for i, iface := range jobm {
-		if iface == nil {
-			continue
+		switch payload := iface.(type) {
+		case string:
+			var job Job
+			err := unmarshal(strings.NewReader(payload), &job)
+			if err != nil {
+				return nil, err
+			}
+			jobs[i] = &job
 		}
-		jobFields, ok := iface.([]interface{})
-		if !ok {
-			continue
-		}
-		job, err := jobFromRedisFields(jobFields)
-		if err != nil {
-			return nil, err
-		}
-		jobs[i] = job
 	}
 	return jobs, nil
 }
@@ -395,67 +412,33 @@ func (q *redisQueue) PromoteJob(jobID string, opt *PromoteOptions) error {
 		return err
 	}
 
-	queueKey := opt.Namespace + ":queue:" + opt.QueueID
-	jobKey := opt.Namespace + ":job:" + jobID
-
-	// Look up the separately-stored AllowPromotion metadata so PromoteJob
-	// honors the same per-job semantic as Enqueue without depending on the
-	// mutable serialized job payload. With AllowPromotion=false (default),
-	// PromoteJob keeps the GT guard and is effectively a no-op for any
-	// job whose score sits in the future (either deferred via dedup or
-	// in-flight via Dequeue's InvisibleSec mark). With AllowPromotion=true,
-	// the caller has asserted that the job's calling pattern is safe to
-	// demote — the typical use case is a subqueue handler middleware that
-	// promotes the next gated job after the prior handler Acks.
+	// promoteScript reads the separately-stored AllowPromotion metadata and
+	// performs the ZADD atomically. With AllowPromotion=false (default), the
+	// ZADD keeps the GT guard and is effectively a no-op for any job whose
+	// score sits in the future (either deferred via dedup or in-flight via
+	// Dequeue's InvisibleSec mark). With AllowPromotion=true, the caller
+	// has asserted that the job's calling pattern is safe to demote — the
+	// typical use case is a subqueue handler middleware that promotes the
+	// next gated job after the prior handler Acks.
 	//
 	// If the job is no longer stored (already Ack'd or never enqueued),
-	// the XX flag below would prevent (re-)adding it anyway, so a missing
-	// hash is treated as a no-op rather than an error.
-	allowPromotion, err := q.client.HGet(context.Background(), jobKey, "allow_promotion").Result()
-	if errors.Is(err, redis.Nil) {
-		allowPromotion = ""
-	} else if err != nil {
-		return err
-	}
-
-	// XX always: do not resurrect a job whose hash exists but was removed
-	// from the queue ZSET (e.g. after an Ack race) — and never add a
-	// member that doesn't already exist. GT only when the job did not
-	// opt into promotion.
-	return q.client.ZAddArgs(
+	// the script's XX flag prevents (re-)adding it, so a missing hash is a
+	// no-op rather than an error.
+	err = q.promoteScript.Run(
 		context.Background(),
-		queueKey,
-		redis.ZAddArgs{
-			XX: true,
-			GT: !redisAllowPromotion(allowPromotion),
-			Members: []redis.Z{{
-				Score:  float64(time.Now().Unix()),
-				Member: jobKey,
-			}},
-		},
+		q.client,
+		[]string{opt.Namespace},
+		opt.Namespace,
+		opt.QueueID,
+		jobID,
+		time.Now().Unix(),
 	).Err()
-}
-
-func jobFromRedisFields(fields []interface{}) (*Job, error) {
-	var job Job
-	if err := unmarshal(strings.NewReader(fields[0].(string)), &job); err != nil {
-		return nil, err
+	if errors.Is(err, redis.Nil) {
+		// ZADD XX with no member added returns nil; go-redis surfaces this
+		// as redis.Nil from the script. Treat it as a successful no-op.
+		return nil
 	}
-	if len(fields) > 1 {
-		job.AllowPromotion = redisAllowPromotion(fields[1])
-	}
-	return &job, nil
-}
-
-func redisAllowPromotion(v interface{}) bool {
-	switch value := v.(type) {
-	case string:
-		return value == "1"
-	case []byte:
-		return string(value) == "1"
-	default:
-		return false
-	}
+	return err
 }
 
 func (q *redisQueue) GetQueueMetrics(opt *QueueMetricsOptions) (*QueueMetrics, error) {

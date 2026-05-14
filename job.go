@@ -48,6 +48,12 @@ type Job struct {
 	// PromoteJob advance a scheduled-but-pending job to now. The caller is
 	// responsible for ensuring this is safe — typically that the job has a
 	// unique ID and is not relied on for dedup-deferral.
+	//
+	// This field is write-only at the Go API: it is persisted to Redis on
+	// Enqueue and consulted server-side by Enqueue and PromoteJob, but it
+	// is NOT rehydrated onto jobs returned by Dequeue or BulkFind — those
+	// always observe the zero value. PromoteJob reads the persisted value
+	// directly from Redis, so callers do not need to round-trip it.
 	AllowPromotion bool `msgpack:"-" json:",omitempty"`
 }
 
