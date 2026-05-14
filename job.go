@@ -48,7 +48,7 @@ type Job struct {
 	// advance a scheduled-but-pending job to now. The caller is responsible
 	// for ensuring this is safe — typically that the job has a unique ID
 	// and is not relied on for dedup-deferral.
-	AllowPromotion bool `msgpack:"allow_promotion,omitempty" json:",omitempty"`
+	AllowPromotion bool `msgpack:"-" json:",omitempty"`
 }
 
 // InvalidJobPayloadError wraps json or msgpack decoding error.

@@ -38,7 +38,8 @@ func TestRedisQueueEnqueue(t *testing.T) {
 	jobm, err := marshal(job)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"msgpack": string(jobm),
+		"allow_promotion": "0",
+		"msgpack":          string(jobm),
 	}, h)
 
 	jobs, err := q.BulkFind([]string{job.ID, "not-exist-id"}, &FindOptions{
@@ -153,7 +154,8 @@ func TestRedisQueueDequeue(t *testing.T) {
 	jobm, err := marshal(job)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"msgpack": string(jobm),
+		"allow_promotion": "0",
+		"msgpack":          string(jobm),
 	}, h)
 
 	z, err = client.ZRangeByScoreWithScores(
@@ -206,7 +208,8 @@ func TestRedisQueueDequeueDeletedJob(t *testing.T) {
 	jobm, err := marshal(job)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"msgpack": string(jobm),
+		"allow_promotion": "0",
+		"msgpack":          string(jobm),
 	}, h)
 
 	require.NoError(t, client.Del(context.Background(), jobKey).Err())
@@ -433,11 +436,21 @@ func TestRedisQueueEnqueueGuardDoesNotDemote(t *testing.T) {
 
 	// Re-enqueue the same ID with an earlier score (the dedup pattern).
 	job.EnqueuedAt = time.Now()
+	job.AllowPromotion = true
 	require.NoError(t, q.Enqueue(job, opts))
 
 	scoreAfterSecond, err := client.ZScore(context.Background(), queueKey, jobKey).Result()
 	require.NoError(t, err)
 	require.Equal(t, scoreAfterFirst, scoreAfterSecond, "GT must reject the earlier-score re-enqueue when AllowPromotion is false")
+
+	require.NoError(t, q.PromoteJob(job.ID, &PromoteOptions{
+		Namespace: opts.Namespace,
+		QueueID:   opts.QueueID,
+	}))
+
+	scoreAfterPromote, err := client.ZScore(context.Background(), queueKey, jobKey).Result()
+	require.NoError(t, err)
+	require.Equal(t, scoreAfterFirst, scoreAfterPromote, "no-op re-enqueue must not flip AllowPromotion")
 }
 
 func TestRedisQueueEnqueueAllowPromotionDemotes(t *testing.T) {
