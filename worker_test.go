@@ -498,3 +498,58 @@ func TestRetry(t *testing.T) {
 		require.True(t, delays[i] > 1)
 	}
 }
+
+// fakeRequeuerQueue is a Queue that also implements Requeuer; it records which
+// path the retry middleware takes.
+type fakeRequeuerQueue struct {
+	enqueued    int
+	requeued    int
+	lastBackoff time.Duration
+}
+
+func (q *fakeRequeuerQueue) Enqueue(*Job, *EnqueueOptions) error   { q.enqueued++; return nil }
+func (q *fakeRequeuerQueue) Dequeue(*DequeueOptions) (*Job, error) { return nil, ErrEmptyQueue }
+func (q *fakeRequeuerQueue) Ack(*Job, *AckOptions) error           { return nil }
+func (q *fakeRequeuerQueue) Requeue(job *Job, backoff time.Duration, opt *EnqueueOptions) error {
+	q.requeued++
+	q.lastBackoff = backoff
+	return nil
+}
+
+// fakePlainQueue is a Queue that does NOT implement Requeuer.
+type fakePlainQueue struct{ enqueued int }
+
+func (q *fakePlainQueue) Enqueue(*Job, *EnqueueOptions) error   { q.enqueued++; return nil }
+func (q *fakePlainQueue) Dequeue(*DequeueOptions) (*Job, error) { return nil, ErrEmptyQueue }
+func (q *fakePlainQueue) Ack(*Job, *AckOptions) error           { return nil }
+
+func TestRetryPrefersRequeuer(t *testing.T) {
+	q := &fakeRequeuerQueue{}
+	retrier := retry(q, defaultBackoff())
+	job := NewJob()
+	opt := &DequeueOptions{Namespace: "{ns}", QueueID: "q1", InvisibleSec: 10}
+
+	h := retrier(func(*Job, *DequeueOptions) error { return fmt.Errorf("boom") })
+	err := h(job, opt)
+	require.Error(t, err)
+
+	// The retry move went through Requeue (with a backoff), not Enqueue.
+	require.Equal(t, 1, q.requeued)
+	require.Equal(t, 0, q.enqueued)
+	require.EqualValues(t, 1, job.Retries)
+}
+
+func TestRetryFallsBackToEnqueue(t *testing.T) {
+	q := &fakePlainQueue{}
+	retrier := retry(q, defaultBackoff())
+	job := NewJob()
+	opt := &DequeueOptions{Namespace: "{ns}", QueueID: "q1", InvisibleSec: 10}
+
+	h := retrier(func(*Job, *DequeueOptions) error { return fmt.Errorf("boom") })
+	err := h(job, opt)
+	require.Error(t, err)
+
+	// A queue without Requeuer keeps using Enqueue — byte-identical behavior.
+	require.Equal(t, 1, q.enqueued)
+	require.EqualValues(t, 1, job.Retries)
+}
