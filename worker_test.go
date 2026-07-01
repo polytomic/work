@@ -505,6 +505,7 @@ type fakeRequeuerQueue struct {
 	enqueued    int
 	requeued    int
 	lastBackoff time.Duration
+	requeueErr  error
 }
 
 func (q *fakeRequeuerQueue) Enqueue(*Job, *EnqueueOptions) error   { q.enqueued++; return nil }
@@ -513,7 +514,7 @@ func (q *fakeRequeuerQueue) Ack(*Job, *AckOptions) error           { return nil 
 func (q *fakeRequeuerQueue) Requeue(job *Job, backoff time.Duration, opt *EnqueueOptions) error {
 	q.requeued++
 	q.lastBackoff = backoff
-	return nil
+	return q.requeueErr
 }
 
 // fakePlainQueue is a Queue that does NOT implement Requeuer.
@@ -541,6 +542,27 @@ func TestRetryPrefersRequeuer(t *testing.T) {
 	// Requeue receives the backoff explicitly, so EnqueuedAt (the Enqueue
 	// path's score) is left untouched on this branch.
 	require.Equal(t, enqueuedAtBefore, job.EnqueuedAt)
+}
+
+func TestRetryRequeueErrorSurfaced(t *testing.T) {
+	reqErr := errors.New("redis unavailable")
+	q := &fakeRequeuerQueue{requeueErr: reqErr}
+
+	// Build the chain the worker builds: wrapHandlerError sits inside retry, so
+	// a handler error becomes a *wrappedHandlerError that Worker.start
+	// suppresses. A Requeue failure must escape that suppression.
+	inner := wrapHandlerError(func(*Job, *DequeueOptions) error { return fmt.Errorf("boom") })
+	h := retry(q, defaultBackoff())(inner)
+	opt := &DequeueOptions{Namespace: "{ns}", QueueID: "q1", InvisibleSec: 10}
+
+	err := h(NewJob(), opt)
+	require.Error(t, err)
+	// The requeue failure is reported (errors.Is finds it)...
+	require.ErrorIs(t, err, reqErr)
+	// ...and it is NOT a wrappedHandlerError, so Worker.start's suppression
+	// branch does not swallow it.
+	var whe *wrappedHandlerError
+	require.False(t, errors.As(err, &whe), "requeue failure must not be suppressed as a handler error")
 }
 
 func TestRetryFallsBackToEnqueue(t *testing.T) {
