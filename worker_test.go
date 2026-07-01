@@ -529,6 +529,7 @@ func TestRetryPrefersRequeuer(t *testing.T) {
 	job := NewJob()
 	opt := &DequeueOptions{Namespace: "{ns}", QueueID: "q1", InvisibleSec: 10}
 
+	enqueuedAtBefore := job.EnqueuedAt
 	h := retrier(func(*Job, *DequeueOptions) error { return fmt.Errorf("boom") })
 	err := h(job, opt)
 	require.Error(t, err)
@@ -537,6 +538,9 @@ func TestRetryPrefersRequeuer(t *testing.T) {
 	require.Equal(t, 1, q.requeued)
 	require.Equal(t, 0, q.enqueued)
 	require.EqualValues(t, 1, job.Retries)
+	// Requeue receives the backoff explicitly, so EnqueuedAt (the Enqueue
+	// path's score) is left untouched on this branch.
+	require.Equal(t, enqueuedAtBefore, job.EnqueuedAt)
 }
 
 func TestRetryFallsBackToEnqueue(t *testing.T) {

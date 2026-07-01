@@ -385,18 +385,20 @@ func retry(queue Queue, backoff BackoffFunc) HandleMiddleware {
 				job.UpdatedAt = now
 
 				d := backoff(job, opt)
-				job.EnqueuedAt = now.Add(d)
 				// Prefer the Requeuer hook when the queue implements it, so a
 				// queue whose "retry a failed job" differs from "enqueue a new
 				// job" gets the right operation with the computed backoff.
 				// RedisQueue does not implement Requeuer, so it keeps using
 				// Enqueue and is byte-identical.
 				if r, ok := queue.(Requeuer); ok {
+					// Requeue carries the backoff explicitly; EnqueuedAt (the
+					// Enqueue path's score) is left untouched.
 					r.Requeue(job, d, &EnqueueOptions{
 						Namespace: opt.Namespace,
 						QueueID:   opt.QueueID,
 					})
 				} else {
+					job.EnqueuedAt = now.Add(d)
 					queue.Enqueue(job, &EnqueueOptions{
 						Namespace: opt.Namespace,
 						QueueID:   opt.QueueID,
