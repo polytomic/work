@@ -385,20 +385,23 @@ func retry(queue Queue, backoff BackoffFunc) HandleMiddleware {
 				job.UpdatedAt = now
 
 				d := backoff(job, opt)
+				// EnqueuedAt is the job's next-execution time — RedisQueue's
+				// score, and read by status reporting — so keep it consistent
+				// with the delay on both paths. The Requeuer additionally
+				// receives d explicitly as its scheduling instruction.
+				job.EnqueuedAt = now.Add(d)
 				// Prefer the Requeuer hook when the queue implements it, so a
 				// queue whose "retry a failed job" differs from "enqueue a new
 				// job" gets the right operation with the computed backoff.
 				// RedisQueue does not implement Requeuer, so it keeps using
 				// Enqueue and is byte-identical.
 				if r, ok := queue.(Requeuer); ok {
-					// Requeue carries the backoff explicitly; EnqueuedAt (the
-					// Enqueue path's score) is left untouched. Surface a Requeue
-					// failure instead of the handler error: the latter is a
-					// *wrappedHandlerError that Worker.start suppresses, so a
-					// Requeue infrastructure failure — which can strand the job in
-					// the in-flight structure until its lease lapses — would go
-					// unreported. This error is not a wrappedHandlerError, so it
-					// reaches the worker's ErrorFunc.
+					// Surface a Requeue failure instead of the handler error: the
+					// latter is a *wrappedHandlerError that Worker.start
+					// suppresses, so a Requeue infrastructure failure — which can
+					// strand the job in the in-flight structure until its lease
+					// lapses — would go unreported. This error is not a
+					// wrappedHandlerError, so it reaches the worker's ErrorFunc.
 					if reqErr := r.Requeue(job, d, &EnqueueOptions{
 						Namespace: opt.Namespace,
 						QueueID:   opt.QueueID,
@@ -406,7 +409,6 @@ func retry(queue Queue, backoff BackoffFunc) HandleMiddleware {
 						return fmt.Errorf("work: requeue failed for job %s (handler error: %v): %w", job.ID, err, reqErr)
 					}
 				} else {
-					job.EnqueuedAt = now.Add(d)
 					queue.Enqueue(job, &EnqueueOptions{
 						Namespace: opt.Namespace,
 						QueueID:   opt.QueueID,
